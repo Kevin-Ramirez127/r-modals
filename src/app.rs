@@ -110,6 +110,51 @@ fn decode_bytes(bytes: &[u8]) -> Option<egui::ColorImage> {
     ))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decode_valid_png() {
+        let bytes = include_bytes!("../assets/firefox.png");
+        assert!(decode_bytes(bytes).is_some());
+        let img = decode_bytes(bytes).unwrap();
+        assert_eq!(img.size, [32, 32]);
+    }
+
+    #[test]
+    fn decode_invalid_bytes_returns_none() {
+        assert!(decode_bytes(b"not an image").is_none());
+        assert!(decode_bytes(include_bytes!("../README.md")).is_none());
+    }
+
+    #[test]
+    fn load_icon_variants() {
+        // File (ships with repo)
+        assert!(load_icon(&IconSource::File("assets/firefox.png".into())).is_some());
+        // Missing file -> None (graceful)
+        assert!(load_icon(&IconSource::File("assets/does-not-exist.png".into())).is_none());
+        // Bytes
+        let bytes = include_bytes!("../assets/terminal.png").to_vec();
+        assert!(load_icon(&IconSource::Bytes(bytes)).is_some());
+        assert!(load_icon(&IconSource::Bytes(b"junk".to_vec())).is_none());
+        // Pixels: valid + length mismatch
+        assert!(load_icon(&IconSource::Pixels {
+            width: 2,
+            height: 2,
+            rgba: vec![255; 2 * 2 * 4],
+        })
+        .is_some());
+        assert!(load_icon(&IconSource::Pixels {
+            width: 2,
+            height: 2,
+            rgba: vec![255; 3],
+        })
+        .is_none());
+        assert!(load_icon(&IconSource::None).is_none());
+    }
+}
+
 impl eframe::App for ModalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let t = self.modal.theme.clone();
