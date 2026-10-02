@@ -1,0 +1,56 @@
+# r-modals
+
+Instant modals made with Rust.
+
+One call pops a centered, borderless, searchable option picker (eframe/egui backend, works on X11 + Wayland).
+
+## Features
+
+- **Modals** — `Modal::new("Title").run()` blocks until pick / cancel
+- **Options** — `ModalOption::new(id, label).description(...)`
+- **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
+- **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
+- **Customizable** — `Theme::{dark,light,transparent_dark}` + width/height, rounding, padding, fonts, colors, border
+
+## Usage
+
+```rust
+use quick_modals::{Modal, ModalOption, Theme};
+
+let choice = Modal::new("Launcher")
+    .placeholder("Type to filter…")
+    .case_sensitive(false)
+    .option(ModalOption::new("ff", "Firefox").description("Web browser"))
+    .option(ModalOption::new("term", "Terminal").icon("icons/term.png"))
+    .theme(Theme::dark().rounded(12.0))
+    .run()
+    .unwrap();
+```
+
+`run()` returns `Ok(Some(ModalSelection { id, label, index, query }))` or `Ok(None)` on Esc/close.
+
+Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + click works too.
+
+## Examples
+
+```sh
+cargo run --example basic
+cargo run --example case_sensitive
+cargo run --example themed_icons
+```
+
+Headless filtering (no window) is also available and unit-tested:
+
+```rust
+let m = Modal::new("x").option(ModalOption::new("a", "Alpha"));
+assert_eq!(m.filtered_indices("alp"), vec![0]);
+```
+
+## Notes
+
+- eframe centers the window; `Position::Custom { x, y }` sets an explicit position.
+  True layer-shell exclusivity is compositor-specific and intentionally out of scope.
+- Icons decode via the `image` crate at render time and are cached as egui textures.
+- Tiling compositors (sway/Hyprland/…) tile the modal and ignore its size.
+  Float it via the `quick-modals` app_id (override with `Modal::app_id`), e.g. sway:
+  `for_window [app_id="quick-modals"] floating enable`.
