@@ -27,16 +27,12 @@ impl IconSource {
         match self {
             IconSource::None => None,
             IconSource::File(p) => Some(format!("icon:{option_id}:file:{}", p.display())),
-            IconSource::Bytes(b) => Some(format!(
-                "icon:{option_id}:bytes:{}:{:x}",
-                b.len(),
-                {
-                    use std::hash::{Hash, Hasher};
-                    let mut h = std::collections::hash_map::DefaultHasher::new();
-                    b.hash(&mut h);
-                    h.finish()
-                }
-            )),
+            IconSource::Bytes(b) => Some(format!("icon:{option_id}:bytes:{}:{:x}", b.len(), {
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                b.hash(&mut h);
+                h.finish()
+            })),
             IconSource::Pixels { width, height, .. } => {
                 Some(format!("icon:{option_id}:px:{width}x{height}"))
             }
@@ -148,7 +144,10 @@ mod tests {
         let a = IconSource::Bytes(vec![0u8; 16]);
         let b = IconSource::Bytes(vec![1u8; 16]);
         assert_ne!(a.cache_key("x"), b.cache_key("x"));
-        assert_eq!(a.cache_key("x"), IconSource::Bytes(vec![0u8; 16]).cache_key("x"));
+        assert_eq!(
+            a.cache_key("x"),
+            IconSource::Bytes(vec![0u8; 16]).cache_key("x")
+        );
     }
 
     #[test]

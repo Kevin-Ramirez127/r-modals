@@ -1,4 +1,4 @@
-use crate::{filter_options, ModalOption, Position, SearchConfig, Theme};
+use crate::{filter_options, Layout, ModalOption, Position, SearchConfig, Theme};
 use std::sync::{Arc, Mutex};
 
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
@@ -30,6 +30,8 @@ pub struct Modal {
     pub(crate) options: Vec<ModalOption>,
     pub(crate) search: SearchConfig,
     pub(crate) theme: Theme,
+    pub(crate) layout: Layout,
+    pub(crate) center_on_navigate: bool,
     pub(crate) position: Position,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
@@ -43,6 +45,8 @@ impl Modal {
             options: Vec::new(),
             search: SearchConfig::default(),
             theme: Theme::default(),
+            layout: Layout::default(),
+            center_on_navigate: true,
             position: Position::Center,
             initial_query: String::new(),
             app_id: "quick-modals".to_string(),
@@ -94,6 +98,21 @@ impl Modal {
     /// Visual theme override.
     pub fn theme(mut self, theme: Theme) -> Self {
         self.theme = theme;
+        self
+    }
+
+    /// List rows (thumbnail + text) or grid squares (image only).
+    /// Defaults to [`Layout::List`].
+    pub fn layout(mut self, layout: Layout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    /// Center the selected row/tile in the scroll area on keyboard
+    /// navigation. Defaults to `true`; pass `false` to leave the
+    /// scroll position untouched.
+    pub fn center_on_navigate(mut self, yes: bool) -> Self {
+        self.center_on_navigate = yes;
         self
     }
 
@@ -186,5 +205,16 @@ impl Modal {
             return Err(format!("quick-modals backend error: {e}"));
         }
         Ok(shared.lock().map(|g| g.clone()).unwrap_or(None))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn center_on_navigate_defaults_on_and_is_settable() {
+        assert!(Modal::new("x").center_on_navigate);
+        assert!(!Modal::new("x").center_on_navigate(false).center_on_navigate);
     }
 }

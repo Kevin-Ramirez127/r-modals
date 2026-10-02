@@ -10,6 +10,7 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Options** — `ModalOption::new(id, label).description(...)`
 - **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
+- **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image (`.layout(Layout::Grid)` + `.tile_size(128.0)`); keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
 - **Customizable** — `Theme::{dark,light,transparent_dark}` + width/height, rounding, padding, fonts, colors, border
 
 ## Usage
@@ -37,6 +38,8 @@ Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + cl
 cargo run --example basic
 cargo run --example case_sensitive
 cargo run --example themed_icons
+cargo run --example image_picker            # pick one of several images
+cargo run --example image_picker -- ~/Pictures/wallpapers
 ```
 
 Headless filtering (no window) is also available and unit-tested:

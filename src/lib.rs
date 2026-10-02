@@ -23,7 +23,7 @@
 //! - [`Modal`] — builder + [`Modal::run`] entry point.
 //! - [`ModalOption`] / [`IconSource`] — options + images.
 //! - [`SearchConfig`] + [`filter_options`] — testable filtering logic.
-//! - [`Theme`] / [`Position`] — customization.
+//! - [`Theme`] / [`Position`] / [`Layout`] — customization.
 //!
 //! Backend: [`eframe`]/[`egui`] borderless always-on-top window.
 //! This approximates on X11/Wayland without requiring
@@ -38,4 +38,4 @@ mod theme;
 pub use modal::{Modal, ModalSelection};
 pub use option::{IconSource, ModalOption};
 pub use search::{filter_options, SearchConfig};
-pub use theme::{Position, Theme};
+pub use theme::{Layout, Position, Theme};

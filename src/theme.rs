@@ -15,6 +15,17 @@ pub enum Position {
     Custom { x: u16, y: u16 },
 }
 
+/// How options are laid out in the modal window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Layout {
+    /// One row per option: thumbnail followed by label + description.
+    #[default]
+    List,
+    /// Square tiles where each tile IS the image (no text).
+    /// Label is shown as a hover tooltip; search still filters on it.
+    Grid,
+}
+
 /// Visual customization for the modal.
 ///
 /// Use builders: `Theme::dark().rounded(12.0).width(560.0)`.
@@ -30,6 +41,8 @@ pub struct Theme {
     pub row_height: f32,
     /// Icon size in logical pixels.
     pub icon_size: f32,
+    /// Tile edge length in logical pixels (used with [`Layout::Grid`]).
+    pub tile_size: f32,
     /// Corner rounding.
     pub corner_radius: f32,
     /// Outer padding.
@@ -67,6 +80,7 @@ impl Theme {
             max_visible_items: 8,
             row_height: 44.0,
             icon_size: 28.0,
+            tile_size: 112.0,
             corner_radius: 12.0,
             padding: 12.0,
             item_spacing: 4.0,
@@ -146,6 +160,10 @@ impl Theme {
     }
     pub fn show_descriptions(mut self, yes: bool) -> Self {
         self.show_descriptions = yes;
+        self
+    }
+    pub fn tile_size(mut self, s: f32) -> Self {
+        self.tile_size = s;
         self
     }
 }
