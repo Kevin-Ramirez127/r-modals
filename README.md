@@ -11,7 +11,8 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
 - **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image (`.layout(Layout::Grid)` + `.tile_size(128.0)`); keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
-- **Customizable** — `Theme::{dark,light,transparent_dark}` + width/height, rounding, padding, fonts, colors, border
+- **Customizable** — `Theme::{dark,light,transparent_dark}` + width/height, rounding, padding, margin, fonts, colors, border
+- **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width
 
 ## Usage
 

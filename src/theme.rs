@@ -47,6 +47,8 @@ pub struct Theme {
     pub corner_radius: f32,
     /// Outer padding.
     pub padding: f32,
+    /// Outer margin around the frame (space to the window edge).
+    pub margin: f32,
     /// Gap between rows.
     pub item_spacing: f32,
     /// Colors.
@@ -83,6 +85,7 @@ impl Theme {
             tile_size: 112.0,
             corner_radius: 12.0,
             padding: 12.0,
+            margin: 8.0,
             item_spacing: 4.0,
             background: Color32::from_rgb(24, 24, 28),
             surface: Color32::from_rgb(34, 34, 40),
@@ -136,6 +139,10 @@ impl Theme {
         self.padding = p;
         self
     }
+    pub fn margin(mut self, m: f32) -> Self {
+        self.margin = m;
+        self
+    }
     pub fn max_visible_items(mut self, n: usize) -> Self {
         self.max_visible_items = n;
         self
@@ -165,5 +172,17 @@ impl Theme {
     pub fn tile_size(mut self, s: f32) -> Self {
         self.tile_size = s;
         self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn margin_defaults_and_settable() {
+        assert_eq!(Theme::dark().margin, 8.0);
+        assert_eq!(Theme::dark().margin(0.0).margin, 0.0);
+        assert_eq!(Theme::dark().margin(24.0).margin, 24.0);
     }
 }

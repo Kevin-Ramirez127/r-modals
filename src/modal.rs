@@ -32,6 +32,7 @@ pub struct Modal {
     pub(crate) theme: Theme,
     pub(crate) layout: Layout,
     pub(crate) center_on_navigate: bool,
+    pub(crate) fit_width_to_content: bool,
     pub(crate) position: Position,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
@@ -47,6 +48,7 @@ impl Modal {
             theme: Theme::default(),
             layout: Layout::default(),
             center_on_navigate: true,
+            fit_width_to_content: false,
             position: Position::Center,
             initial_query: String::new(),
             app_id: "quick-modals".to_string(),
@@ -113,6 +115,14 @@ impl Modal {
     /// scroll position untouched.
     pub fn center_on_navigate(mut self, yes: bool) -> Self {
         self.center_on_navigate = yes;
+        self
+    }
+
+    /// Shrink the window width to fit the content instead of using the
+    /// full [`Theme`] width. The width never drops below 320px and never
+    /// exceeds the theme width. Defaults to `false`.
+    pub fn fit_width_to_content(mut self, yes: bool) -> Self {
+        self.fit_width_to_content = yes;
         self
     }
 
@@ -216,5 +226,15 @@ mod tests {
     fn center_on_navigate_defaults_on_and_is_settable() {
         assert!(Modal::new("x").center_on_navigate);
         assert!(!Modal::new("x").center_on_navigate(false).center_on_navigate);
+    }
+
+    #[test]
+    fn fit_width_defaults_off_and_is_settable() {
+        assert!(!Modal::new("x").fit_width_to_content);
+        assert!(
+            Modal::new("x")
+                .fit_width_to_content(true)
+                .fit_width_to_content
+        );
     }
 }

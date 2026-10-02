@@ -14,6 +14,17 @@ pub(crate) struct ModalApp {
     scroll_to_cursor: bool,
     /// Last scroll offset of the option area (diagnostic, used by tests).
     last_scroll_offset: egui::Vec2,
+    /// Width of the option area content, in logical pixels.
+    last_content_width: f32,
+    /// Width the content settled at (debounces transient multi-pass layouts).
+    fit_candidate: f32,
+    /// Consecutive updates the content width stayed put.
+    fit_stable_frames: u32,
+    /// Pointer position at the end of the last frame: hover only steals the
+    /// cursor on fresh mouse movement, so it never fights keyboard nav.
+    last_hover_pos: Option<egui::Pos2>,
+    /// Width last sent via an `InnerSize` viewport command.
+    last_sent_width: f32,
     /// Column count of the last rendered grid (drives row-wise Up/Down).
     last_columns: usize,
 }
@@ -35,6 +46,11 @@ impl ModalApp {
             focused_once: false,
             scroll_to_cursor: false,
             last_scroll_offset: egui::Vec2::ZERO,
+            last_content_width: 0.0,
+            fit_candidate: -1.0,
+            fit_stable_frames: 0,
+            last_hover_pos: None,
+            last_sent_width: -1.0,
             last_columns: 1,
         }
     }
@@ -66,6 +82,12 @@ impl ModalApp {
             *g = sel;
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+    }
+
+    /// True when the pointer moved since the last frame: only fresh mouse
+    /// movement may take the cursor away from keyboard navigation.
+    fn hover_fresh(&self, ctx: &egui::Context) -> bool {
+        ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos
     }
 
     fn icon_texture(
@@ -107,7 +129,11 @@ impl ModalApp {
                         .corner_radius(t.corner_radius * 0.6)
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
+                            // Stretch rows full-width, unless fitting the
+                            // window to the content (then rows size to text).
+                            if !self.modal.fit_width_to_content {
+                                ui.set_width(ui.available_width());
+                            }
                             ui.horizontal(|ui| {
                                 // Icon (cached texture or placeholder box).
                                 let tex = self.icon_texture(ctx, &opt.id, &opt.icon);
@@ -154,8 +180,9 @@ impl ModalApp {
                     if self.scroll_to_cursor && pos == self.cursor {
                         row.response.scroll_to_me(Some(egui::Align::Center));
                     }
-                    // Click + hover select.
-                    if row.response.hovered() {
+                    // Click + hover select (hover only on fresh mouse
+                    // movement, so it never fights keyboard navigation).
+                    if row.response.hovered() && self.hover_fresh(ctx) {
                         self.cursor = pos;
                     }
                     if row.response.clicked() {
@@ -166,6 +193,7 @@ impl ModalApp {
                 }
             });
         self.last_scroll_offset = out.state.offset;
+        self.last_content_width = out.content_size.x;
     }
 
     /// Grid squares: each tile IS the image (no text, tooltip shows the label).
@@ -234,7 +262,9 @@ impl ModalApp {
                             if self.scroll_to_cursor && pos == self.cursor {
                                 tile_resp.scroll_to_me(Some(egui::Align::Center));
                             }
-                            if tile_resp.hovered() {
+                            // Hover takes the cursor only on fresh mouse movement,
+                            // so it never fights keyboard navigation.
+                            if tile_resp.hovered() && self.hover_fresh(ctx) {
                                 self.cursor = pos;
                             }
                             if tile_resp.clicked() {
@@ -249,6 +279,7 @@ impl ModalApp {
                     });
             });
         self.last_scroll_offset = out.state.offset;
+        self.last_content_width = out.content_size.x;
     }
 }
 
@@ -363,7 +394,7 @@ mod tests {
         for pass in 0..10 {
             // Large time steps so the scroll animation completes.
             let t = pass as f64 * 0.25;
-            ctx.run(headless_input(t), |ctx| {
+            let _ = ctx.run(headless_input(t), |ctx| {
                 egui::CentralPanel::default().show(ctx, |ui| {
                     let mut wanted = egui::Rect::NOTHING;
                     let out = egui::ScrollArea::vertical()
@@ -448,7 +479,7 @@ mod tests {
         let mut t = 0.0;
         for _ in 0..3 {
             t += 1.0 / 60.0;
-            ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
         }
         assert_eq!(app.cursor, 0);
         let cols = app.last_columns;
@@ -457,7 +488,7 @@ mod tests {
             t += 1.0 / 60.0;
             let mut inp = headless_input(t);
             inp.events.push(key_event(egui::Key::ArrowDown));
-            ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+            let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
         }
         assert_eq!(app.cursor, (8 * cols).min(29));
         assert!(
@@ -475,17 +506,176 @@ mod tests {
         let mut t = 0.0;
         for _ in 0..3 {
             t += 1.0 / 60.0;
-            ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
         }
         let cols = app.last_columns;
         for _ in 0..8 {
             t += 1.0 / 60.0;
             let mut inp = headless_input(t);
             inp.events.push(key_event(egui::Key::ArrowDown));
-            ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+            let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
         }
         assert_eq!(app.cursor, (8 * cols).min(29));
         assert_eq!(app.last_scroll_offset, egui::Vec2::ZERO);
+    }
+
+    fn inner_sizes(out: &egui::FullOutput) -> Vec<egui::Vec2> {
+        out.viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|vo| {
+                vo.commands
+                    .iter()
+                    .filter_map(|c| match c {
+                        egui::ViewportCommand::InnerSize(s) => Some(*s),
+                        _ => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Fit off (default): no resize commands are ever sent.
+    #[test]
+    fn fit_width_off_sends_no_resize() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = grid_app(30, true);
+        let mut t = 0.0;
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            sizes.extend(inner_sizes(&out));
+        }
+        assert!(sizes.is_empty(), "unexpected resize: {sizes:?}");
+    }
+
+    /// Fit on: a narrow grid shrinks the window below the theme width.
+    #[test]
+    fn fit_width_shrinks_window_to_content() {
+        use eframe::App as _;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let modal = crate::Modal::new("fit")
+            .layout(crate::Layout::Grid)
+            .fit_width_to_content(true)
+            .theme(crate::Theme::dark().tile_size(200.0))
+            .options((0..2).map(|i| {
+                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
+                    8,
+                    8,
+                    vec![200; 8 * 8 * 4],
+                )
+            }));
+        let result = Arc::new(Mutex::new(None));
+        let mut app = ModalApp::new(&cc, modal, result);
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut t = 0.0;
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            sizes.extend(inner_sizes(&out));
+        }
+        assert!(!sizes.is_empty(), "expected an InnerSize command");
+        let w = sizes.last().unwrap().x;
+        assert!(
+            (320.0..560.0).contains(&w),
+            "expected shrink-to-fit width, got {w}"
+        );
+    }
+
+    /// Fit must ignore the transient first-pass measurement: multi-pass
+    /// layout reports a narrow width before settling. Regression test:
+    /// no resize below the settled width may ever be sent.
+    #[test]
+    fn fit_ignores_transient_first_pass() {
+        use eframe::App as _;
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let modal = crate::Modal::new("Pick an image")
+            .layout(crate::Layout::Grid)
+            .fit_width_to_content(true)
+            .theme(
+                crate::Theme::dark()
+                    .rounded(12.0)
+                    .width(560.0)
+                    .tile_size(128.0),
+            )
+            .options((0..6).map(|i| {
+                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
+                    8,
+                    8,
+                    vec![200; 8 * 8 * 4],
+                )
+            }));
+        let result = Arc::new(Mutex::new(None));
+        let mut app = ModalApp::new(&cc, modal, result);
+        let mut frame = eframe::Frame::_new_kittest();
+        let mut t = 0.0;
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            sizes.extend(inner_sizes(&out));
+        }
+        assert!(!sizes.is_empty(), "expected an InnerSize command");
+        for s in &sizes {
+            assert!(
+                s.x >= 400.0,
+                "transient narrow resize must never be sent: {sizes:?}"
+            );
+        }
+    }
+
+    /// Hover follows fresh mouse movement…
+    #[test]
+    fn hover_follows_fresh_movement() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = grid_app(30, true);
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        // Arrow away from tile 0 with no mouse involved.
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(key_event(egui::Key::ArrowRight));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(app.cursor, 1);
+        // Moving the pointer onto tile 0 takes the cursor back.
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events
+            .push(egui::Event::PointerMoved(egui::Pos2::new(80.0, 130.0)));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(app.cursor, 0);
+    }
+
+    /// …but a stationary pointer never overrides keyboard navigation.
+    #[test]
+    fn stationary_pointer_does_not_block_keyboard() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = grid_app(30, true);
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        let cols = app.last_columns;
+        // Park the pointer over tile 0 and leave it there.
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events
+            .push(egui::Event::PointerMoved(egui::Pos2::new(80.0, 130.0)));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(app.cursor, 0);
+        // ArrowDown with the mouse still: keyboard must win.
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(key_event(egui::Key::ArrowDown));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(app.cursor, cols);
     }
 }
 
@@ -561,7 +751,7 @@ impl eframe::App for ModalApp {
             .corner_radius(t.corner_radius)
             .stroke(egui::Stroke::new(t.border_width, t.border))
             .inner_margin(t.padding)
-            .outer_margin(8.0);
+            .outer_margin(t.margin);
 
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
@@ -604,6 +794,36 @@ impl eframe::App for ModalApp {
 
         // Request consumed: only keyboard moves re-center.
         self.scroll_to_cursor = false;
+
+        // Shrink the window width to the measured content (never below
+        // 320px, never above the theme width). The measurement must stay
+        // put for consecutive updates first: the first multi-pass layouts
+        // report transient widths that must never resize the window.
+        // Skipped until the first real measurement so it never flashes narrow.
+        if self.modal.fit_width_to_content
+            && self.last_content_width > 0.0
+            && !self.visible_indices().is_empty()
+        {
+            if (self.last_content_width - self.fit_candidate).abs() <= 1.0 {
+                self.fit_stable_frames += 1;
+            } else {
+                self.fit_candidate = self.last_content_width;
+                self.fit_stable_frames = 0;
+            }
+            if self.fit_stable_frames >= 1 {
+                let want = (self.last_content_width + t.padding * 2.0 + t.margin * 2.0)
+                    .clamp(320.0, t.width);
+                if (want - self.last_sent_width).abs() > 1.0 {
+                    self.last_sent_width = want;
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                        want, t.height,
+                    )));
+                }
+            }
+        } else {
+            self.fit_stable_frames = 0;
+        }
+        self.last_hover_pos = ctx.input(|i| i.pointer.hover_pos());
 
         // Keep repainting for focus / texture readiness.
         ctx.request_repaint_after(std::time::Duration::from_millis(200));

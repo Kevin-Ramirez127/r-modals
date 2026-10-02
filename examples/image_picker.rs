@@ -36,7 +36,8 @@ fn main() -> Result<(), String> {
     let mut modal = Modal::new("Pick an image")
         .placeholder("Search images…")
         .layout(Layout::Grid)
-        .theme(Theme::dark().rounded(12.0).width(560.0).tile_size(128.0));
+        .theme(Theme::dark().rounded(12.0).width(560.0).tile_size(128.0))
+        .fit_width_to_content(true);
 
     // 1) Every image file in the directory becomes a tile.
     let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
