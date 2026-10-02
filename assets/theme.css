@@ -1,0 +1,28 @@
+/* Theme for the `css_themed` example.
+ * Only the documented subset applies — see `Theme::from_css`.
+ * Later rules win; `!important` always wins. */
+
+modal {
+  width: 520px;
+  background: #1a1b26;
+  color: #c0caf5;
+  border-radius: 14px;
+  padding: 14px;
+  margin: 8px;
+  font-size: 15px;
+  border: 1px dashed #414868;
+  gap: 6px;
+  accent-color: #7aa2f7;
+}
+
+tile {
+  background: #24283b;
+}
+
+tile[selected] {
+  background: #33467c;
+}
+
+tile description {
+  color: #565f89;
+}

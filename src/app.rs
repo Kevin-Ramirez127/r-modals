@@ -126,7 +126,7 @@ impl ModalApp {
 
                     let row = egui::Frame::new()
                         .fill(row_fill)
-                        .corner_radius(t.corner_radius * 0.6)
+                        .corner_radius(t.effective_tile_radius())
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             // Stretch rows full-width, unless fitting the
@@ -227,7 +227,7 @@ impl ModalApp {
                             let selected = pos == self.cursor;
                             let tile_resp = egui::Frame::new()
                                 .fill(if selected { t.selected } else { t.surface })
-                                .corner_radius(t.corner_radius * 0.5)
+                                .corner_radius(t.effective_tile_radius())
                                 .stroke(if selected {
                                     egui::Stroke::new(2.0_f32, t.accent)
                                 } else {

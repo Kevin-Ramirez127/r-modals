@@ -11,6 +11,7 @@ categories = ["gui"]
 eframe = { version = "0.32", default-features = false, features = ["default_fonts", "glow", "wayland", "x11", "accesskit"] }
 egui = "0.32"
 image = "0.25"
+lightningcss = "1.0.0-alpha.72"
 
 [dev-dependencies]
 

@@ -30,6 +30,7 @@
 //! compositor-specific layer-shell protocols.
 
 mod app;
+mod css;
 mod modal;
 mod option;
 mod search;

@@ -43,6 +43,9 @@ pub struct Theme {
     pub icon_size: f32,
     /// Tile edge length in logical pixels (used with [`Layout::Grid`]).
     pub tile_size: f32,
+    /// Corner radius of option rows/tiles. `None` (default) derives 60% of
+    /// `corner_radius`, so tiles follow the modal shape automatically.
+    pub tile_radius: Option<f32>,
     /// Corner rounding.
     pub corner_radius: f32,
     /// Outer padding.
@@ -83,6 +86,7 @@ impl Theme {
             row_height: 44.0,
             icon_size: 28.0,
             tile_size: 112.0,
+            tile_radius: None,
             corner_radius: 12.0,
             padding: 12.0,
             margin: 8.0,
@@ -172,6 +176,33 @@ impl Theme {
     pub fn tile_size(mut self, s: f32) -> Self {
         self.tile_size = s;
         self
+    }
+    pub fn tile_radius(mut self, r: f32) -> Self {
+        self.tile_radius = Some(r);
+        self
+    }
+
+    /// Effective option corner radius: explicit override or 60% of the modal radius.
+    pub(crate) fn effective_tile_radius(&self) -> f32 {
+        self.tile_radius.unwrap_or(self.corner_radius * 0.6)
+    }
+
+    /// Build a theme from a CSS stylesheet (see `css` module docs for the
+    /// supported selectors and properties). Starts from [`Theme::dark`].
+    ///
+    /// ```no_run
+    /// use quick_modals::Theme;
+    /// let theme = Theme::from_css("modal { background: #18181c; border-radius: 12px; }").unwrap();
+    /// ```
+    pub fn from_css(css: &str) -> Result<Self, String> {
+        let mut theme = Self::dark();
+        theme.apply_css(css)?;
+        Ok(theme)
+    }
+
+    /// Layer a CSS stylesheet over this theme (last rule wins).
+    pub fn apply_css(&mut self, css: &str) -> Result<(), String> {
+        crate::css::apply_css(self, css)
     }
 }
 

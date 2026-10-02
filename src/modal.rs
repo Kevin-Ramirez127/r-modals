@@ -33,6 +33,7 @@ pub struct Modal {
     pub(crate) layout: Layout,
     pub(crate) center_on_navigate: bool,
     pub(crate) fit_width_to_content: bool,
+    pub(crate) stylesheet: Option<String>,
     pub(crate) position: Position,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
@@ -49,6 +50,7 @@ impl Modal {
             layout: Layout::default(),
             center_on_navigate: true,
             fit_width_to_content: false,
+            stylesheet: None,
             position: Position::Center,
             initial_query: String::new(),
             app_id: "quick-modals".to_string(),
@@ -126,6 +128,32 @@ impl Modal {
         self
     }
 
+    /// Style the modal from a CSS stylesheet (see [`Theme::from_css`] for
+    /// the supported selectors and properties). The stylesheet is layered
+    /// over [`Theme`] on top of the configured theme, so it wins where it
+    /// specifies something and the theme fills in the rest. A bad
+    /// stylesheet makes [`Modal::run`] return `Err`.
+    ///
+    /// ```no_run
+    /// use quick_modals::Modal;
+    /// let sel = Modal::new("Pick one")
+    ///     .stylesheet("modal { background: #18181c; }")
+    ///     .run();
+    /// ```
+    pub fn stylesheet(mut self, css: impl Into<String>) -> Self {
+        self.stylesheet = Some(css.into());
+        self
+    }
+
+    /// Theme with the stylesheet (if any) applied. Used by [`Modal::run`].
+    pub(crate) fn resolved_theme(&self) -> Result<Theme, String> {
+        let mut theme = self.theme.clone();
+        if let Some(css) = &self.stylesheet {
+            theme.apply_css(css)?;
+        }
+        Ok(theme)
+    }
+
     /// Window width/height shortcut.
     pub fn size(mut self, width: f32, height: f32) -> Self {
         self.theme.width = width;
@@ -161,17 +189,20 @@ impl Modal {
     /// Show the modal and block until the user picks or cancels.
     ///
     /// Returns `Ok(None)` on Esc / window close.
-    /// Returns `Err` if the GUI backend fails to start (e.g. no display).
+    /// Returns `Err` if the GUI backend fails to start (e.g. no display),
+    /// or if the [`Modal::stylesheet`] fails to parse.
     pub fn run(self) -> Result<Option<ModalSelection>, String> {
         if self.options.is_empty() {
             return Err("quick-modals: no options provided".to_string());
         }
+        let mut modal = self;
+        modal.theme = modal.resolved_theme()?;
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
         let inner = shared.clone();
-        let title = self.title.clone();
-        let theme = self.theme.clone();
-        let position = self.position;
-        let app_id = self.app_id.clone();
+        let title = modal.title.clone();
+        let theme = modal.theme.clone();
+        let position = modal.position;
+        let app_id = modal.app_id.clone();
 
         let viewport = {
             let mut v = egui::ViewportBuilder::default()
@@ -202,7 +233,7 @@ impl Modal {
             ..Default::default()
         };
 
-        let modal = self;
+        let modal = modal;
         let res = eframe::run_native(
             &title,
             options,
@@ -236,5 +267,21 @@ mod tests {
                 .fit_width_to_content(true)
                 .fit_width_to_content
         );
+    }
+
+    #[test]
+    fn stylesheet_layers_over_theme_and_bad_css_errors() {
+        let m = Modal::new("x")
+            .theme(Theme::dark().width(100.0))
+            .stylesheet("modal { width: 200px; background: #000000; }");
+        let t = m.resolved_theme().unwrap();
+        assert_eq!(t.width, 200.0);
+        assert_eq!(t.background, egui::Color32::from_rgb(0, 0, 0));
+        // Untouched fields keep the custom theme, not the dark default.
+        assert_eq!(t.height, Theme::dark().height);
+        assert!(Modal::new("x")
+            .stylesheet("modal { width: 10px; color }")
+            .resolved_theme()
+            .is_err());
     }
 }
