@@ -5,9 +5,11 @@
 //! - `modal` — the window: `width`, `height`, `background`/`background-color`,
 //!   `color`, `border-radius`, `padding`, `margin`, `font-size`,
 //!   `border`/`border-width`/`border-color`, `gap`, `accent-color`
-//! - `tile` — option rows/tiles: `background`/`background-color`, `border-radius`
+//! - `tile` — option rows/tiles: `background`/`background-color`,
+//!   `border-radius`, `width`/`height` (must match: tiles are square)
+//! - `tile icon` — the icon inside list rows: `width`/`height` (must match)
 //! - `tile[selected]` — the selected row/tile: `background`/`background-color`
-//! - `tile description` — secondary text: `color`
+//! - `tile description` — secondary text: `color`, `display: none` (hides it)
 //!
 //! Only `px` lengths are supported (`0` counts as `0px`). Anything else —
 //! `em`, `%`, `auto` where a length is required — is an error, except
@@ -18,7 +20,12 @@
 
 use crate::Theme;
 use lightningcss::{
-    properties::{border::LineStyle, ui::ColorOrAuto, Property},
+    properties::{
+        border::LineStyle,
+        display::{Display, DisplayKeyword},
+        ui::ColorOrAuto,
+        Property,
+    },
     rules::CssRule,
     stylesheet::{ParserOptions, StyleSheet},
     traits::ToCss,
@@ -33,6 +40,7 @@ use lightningcss::{
 enum Target {
     Modal,
     Tile,
+    TileIcon,
     TileSelected,
     TileDescription,
 }
@@ -41,10 +49,11 @@ fn target_of(selector: &str) -> Result<Target, String> {
     match selector.trim().to_ascii_lowercase().as_str() {
         "modal" => Ok(Target::Modal),
         "tile" => Ok(Target::Tile),
+        "tile icon" => Ok(Target::TileIcon),
         "tile[selected]" => Ok(Target::TileSelected),
         "tile description" => Ok(Target::TileDescription),
         other => Err(format!(
-            "unsupported selector {other:?}; supported: modal, tile, tile[selected], `tile description`"
+            "unsupported selector {other:?}; supported: modal, tile, `tile icon`, tile[selected], `tile description`"
         )),
     }
 }
@@ -77,7 +86,12 @@ pub fn apply_css(theme: &mut Theme, css: &str) -> Result<(), String> {
                     .to_css_string(Default::default())
                     .map_err(|e| format!("CSS error: {e:?}"))?;
                 let target = target_of(&text)?;
+                // Square sizes first (tile/icon width+height must match).
+                apply_square_size(theme, target, decls)?;
                 for decl in decls {
+                    if is_square_size(target, decl) {
+                        continue;
+                    }
                     apply_declaration(theme, target, decl)?;
                 }
             }
@@ -236,6 +250,9 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
                 let [bg] = bgs.as_slice() else {
                     return Err("tile background: multiple backgrounds are not supported".into());
                 };
+                if background_image_present(bg, "tile background")? {
+                    return Err("tile background: background images are not supported".into());
+                }
                 theme.surface = color(&bg.color, "tile background")?;
             }
             Property::BorderRadius(r, _) => {
@@ -243,6 +260,9 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
             }
             _ => return Err(unsupported(target, prop)),
         },
+        // Square sizes (`width`/`height`) are applied by `apply_square_size`
+        // before this runs; anything else on an icon is rejected.
+        Target::TileIcon => return Err(unsupported(target, prop)),
         Target::TileSelected => match prop {
             Property::BackgroundColor(c) => theme.selected = color(c, "tile[selected] background")?,
             Property::Background(bgs) => {
@@ -251,12 +271,25 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
                         "tile[selected] background: multiple backgrounds are not supported".into(),
                     );
                 };
+                if background_image_present(bg, "tile[selected] background")? {
+                    return Err(
+                        "tile[selected] background: background images are not supported".into(),
+                    );
+                }
                 theme.selected = color(&bg.color, "tile[selected] background")?;
             }
             _ => return Err(unsupported(target, prop)),
         },
         Target::TileDescription => match prop {
             Property::Color(c) => theme.dim_text = color(c, "tile description color")?,
+            Property::Display(d) => match d {
+                Display::Keyword(DisplayKeyword::None) => theme.show_descriptions = false,
+                _ => {
+                    return Err(
+                        "tile description display: only `display: none` is supported".into(),
+                    );
+                }
+            },
             _ => return Err(unsupported(target, prop)),
         },
     }
@@ -267,6 +300,7 @@ fn unsupported(target: Target, prop: &Property) -> String {
     let name = match target {
         Target::Modal => "modal",
         Target::Tile => "tile",
+        Target::TileIcon => "`tile icon`",
         Target::TileSelected => "tile[selected]",
         Target::TileDescription => "`tile description`",
     };
@@ -296,6 +330,41 @@ fn size_px(s: &lightningcss::properties::size::Size, what: &str) -> Result<Optio
         Size::Auto => Ok(None),
         Size::LengthPercentage(lp) => Ok(Some(px(lp, what)?)),
         _ => Err(format!("{what}: only px lengths or auto are supported")),
+    }
+}
+
+/// Whether this declaration is a square size handled by `apply_square_size`.
+fn is_square_size(target: Target, decl: &Property) -> bool {
+    matches!(target, Target::Tile | Target::TileIcon)
+        && matches!(decl, Property::Width(_) | Property::Height(_))
+}
+
+/// Tiles and icons are square: `width`/`height` must match when both are
+/// given (a single dimension is enough). Last one wins per pass.
+fn apply_square_size(theme: &mut Theme, target: Target, decls: &[Property]) -> Result<(), String> {
+    let (name, set): (&str, fn(&mut Theme, f32)) = match target {
+        Target::Tile => ("tile", |t, v| t.tile_size = v),
+        Target::TileIcon => ("tile icon", |t, v| t.icon_size = v),
+        _ => return Ok(()),
+    };
+    let mut width = None;
+    let mut height = None;
+    for decl in decls {
+        match decl {
+            Property::Width(s) => width = size_px(s, &format!("{name} width"))?,
+            Property::Height(s) => height = size_px(s, &format!("{name} height"))?,
+            _ => {}
+        }
+    }
+    match (width, height) {
+        (Some(w), Some(h)) if w != h => Err(format!(
+            "{name} width and height must match (tiles are square)"
+        )),
+        (Some(v), _) | (_, Some(v)) => {
+            set(theme, v);
+            Ok(())
+        }
+        (None, None) => Ok(()),
     }
 }
 
@@ -405,15 +474,44 @@ mod tests {
     fn tiles_and_description() {
         let t = themed(
             r#"
-            tile { background: #222228; border-radius: 8px; }
+            tile { background: #222228; border-radius: 8px; width: 128px; height: 128px; }
+            tile icon { width: 32px; height: 32px; }
             tile[selected] { background: rgb(64, 110, 210); }
             tile description { color: rebeccapurple; }
             "#,
         );
         assert_eq!(t.surface, egui::Color32::from_rgb(34, 34, 40));
         assert_eq!(t.tile_radius, Some(8.0));
+        assert_eq!(t.tile_size, 128.0);
+        assert_eq!(t.icon_size, 32.0);
         assert_eq!(t.selected, egui::Color32::from_rgb(64, 110, 210));
         assert_eq!(t.dim_text, egui::Color32::from_rgb(102, 51, 153));
+        assert!(t.show_descriptions);
+    }
+
+    #[test]
+    fn single_tile_dimension_is_enough() {
+        let t = themed("tile { width: 96px; }");
+        assert_eq!(t.tile_size, 96.0);
+    }
+
+    #[test]
+    fn display_none_hides_descriptions() {
+        let t = themed("tile description { display: none; color: red; }");
+        assert!(!t.show_descriptions);
+        assert_eq!(t.dim_text, egui::Color32::from_rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn mismatched_square_sizes_are_rejected() {
+        for bad in [
+            "tile { width: 100px; height: 200px; }",
+            "tile icon { width: 10px; height: 20px; }",
+            "tile description { display: block; }",
+            "tile icon { background: red; }",
+        ] {
+            assert!(Theme::from_css(bad).is_err(), "expected error for {bad:?}");
+        }
     }
 
     #[test]

@@ -1,0 +1,35 @@
+/* Built-in dark theme. Fully specifies every value (see
+ * `Theme::dark`); copy and tweak it for your own theme. */
+
+modal {
+  width: 560px;
+  height: 380px;
+  background: #18181c;
+  color: #ebebf0;
+  border-radius: 12px;
+  padding: 12px;
+  margin: 8px;
+  font-size: 15px;
+  border: 1px solid #3c3c48;
+  gap: 4px;
+  accent-color: #64a0ff;
+}
+
+tile {
+  width: 112px;
+  height: 112px;
+  background: #222228;
+}
+
+tile icon {
+  width: 28px;
+  height: 28px;
+}
+
+tile[selected] {
+  background: #406ed2;
+}
+
+tile description {
+  color: #9696a5;
+}

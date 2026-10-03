@@ -1,4 +1,3 @@
-use egui::Color32;
 use quick_modals::{Modal, ModalOption, Theme};
 
 /// Procedural 16x16 checkerboard icon (RGBA, no files needed).
@@ -43,12 +42,8 @@ fn main() -> Result<(), String> {
                 .description("Raw pixels — checkerboard")
                 .icon_pixels(pw, ph, px),
         )
-        .theme(
-            Theme::transparent_dark()
-                .rounded(16.0)
-                .width(600.0)
-                .accent(Color32::from_rgb(120, 90, 220)),
-        )
+        .theme(Theme::transparent_dark())
+        .stylesheet("modal { width: 600px; border-radius: 16px; accent-color: rgb(120, 90, 220); }")
         .run()?;
 
     println!("{choice:?}");

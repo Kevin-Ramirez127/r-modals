@@ -154,13 +154,6 @@ impl Modal {
         Ok(theme)
     }
 
-    /// Window width/height shortcut.
-    pub fn size(mut self, width: f32, height: f32) -> Self {
-        self.theme.width = width;
-        self.theme.height = height;
-        self
-    }
-
     /// Window placement.
     pub fn position(mut self, pos: Position) -> Self {
         self.position = pos;
@@ -271,8 +264,9 @@ mod tests {
 
     #[test]
     fn stylesheet_layers_over_theme_and_bad_css_errors() {
+        let base = Theme::from_css("modal { width: 100px; }").unwrap();
         let m = Modal::new("x")
-            .theme(Theme::dark().width(100.0))
+            .theme(base)
             .stylesheet("modal { width: 200px; background: #000000; }");
         let t = m.resolved_theme().unwrap();
         assert_eq!(t.width, 200.0);

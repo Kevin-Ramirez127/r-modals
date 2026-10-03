@@ -1,10 +1,10 @@
-//! Benchmark: CSS-styled theme vs plain builder theme.
+//! Benchmark: CSS-styled theme vs plain struct theme.
 //!
 //! Run with: `cargo run --release --example css_bench`
 //!
 //! Measures the one-time cost of parsing/applying a stylesheet
-//! (`Theme::from_css`) against building the same theme with the
-//! builder API (no CSS). Per-frame rendering is identical in both
+//! (`Theme::from_css`) against building the same theme with a struct
+//! literal (no CSS). Per-frame rendering is identical in both
 //! cases: the stylesheet is resolved once in `Modal::run`, before
 //! the window opens.
 
@@ -56,22 +56,23 @@ fn main() {
         black_box(Theme::from_css(black_box(&big)).unwrap());
     });
 
-    // Baseline without CSS: the equivalent builder chain.
-    bench("Theme builder chain (no CSS)", 100_000, || {
-        black_box(
-            Theme::dark()
-                .width(520.0)
-                .rounded(14.0)
-                .padding(14.0)
-                .margin(8.0)
-                .font_size(15.0)
-                .border(egui::Color32::from_rgb(65, 72, 104), 1.0)
-                .accent(egui::Color32::from_rgb(122, 162, 247))
-                .tile_size(128.0),
-        );
+    // Baseline without CSS: the equivalent struct literal.
+    bench("Theme struct literal (no CSS)", 100_000, || {
+        black_box(Theme {
+            width: 520.0,
+            corner_radius: 14.0,
+            padding: 14.0,
+            margin: 8.0,
+            font_size: 15.0,
+            border: egui::Color32::from_rgb(65, 72, 104),
+            border_width: 1.0,
+            accent: egui::Color32::from_rgb(122, 162, 247),
+            tile_size: 128.0,
+            ..Theme::dark()
+        });
     });
 
-    // Keep the compiler honest: the CSS theme equals a builder theme.
+    // Keep the compiler honest: the CSS theme has the expected values.
     assert_eq!(theme.width, 520.0);
     println!("\nNote: per-frame rendering cost is identical — the stylesheet");
     println!("is resolved once in Modal::run; update() only reads Theme fields.");

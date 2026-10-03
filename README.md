@@ -10,22 +10,19 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Options** — `ModalOption::new(id, label).description(...)`
 - **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
-- **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image (`.layout(Layout::Grid)` + `.tile_size(128.0)`); keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
-- **Customizable** — `Theme::{dark,light,transparent_dark}` + width/height, rounding, padding, margin, fonts, colors, border
-- **CSS stylesheets** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); selectors `modal`, `tile`, `tile[selected]`, `tile description`, px-only subset, later rules win
+- **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image; keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
+- **Styling is CSS-only** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); no builder functions. Selectors: `modal`, `tile` (+`width`/`height`, `tile icon`), `tile[selected]`, `tile description` (incl. `display: none`); px-only subset, later rules win. Built-ins (`Theme::dark/light/transparent_dark`) are embedded stylesheets — copy `assets/themes/dark.css` to start your own.
 - **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width
 
 ## Usage
 
 ```rust
-use quick_modals::{Modal, ModalOption, Theme};
+use quick_modals::{Modal, ModalOption};
 
 let choice = Modal::new("Launcher")
-    .placeholder("Type to filter…")
-    .case_sensitive(false)
     .option(ModalOption::new("ff", "Firefox").description("Web browser"))
     .option(ModalOption::new("term", "Terminal").icon("icons/term.png"))
-    .theme(Theme::dark().rounded(12.0))
+    .stylesheet("modal { width: 560px; border-radius: 12px; }")
     .run()
     .unwrap();
 ```

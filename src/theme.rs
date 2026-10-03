@@ -28,18 +28,15 @@ pub enum Layout {
 
 /// Visual customization for the modal.
 ///
-/// Use builders: `Theme::dark().rounded(12.0).width(560.0)`.
+/// Themes are styled with CSS stylesheets: [`Theme::from_css`],
+/// [`Theme::apply_css`], or [`Modal::stylesheet`](crate::Modal::stylesheet).
 #[derive(Debug, Clone)]
 pub struct Theme {
     /// Window width in logical pixels.
     pub width: f32,
     /// Window height in logical pixels.
     pub height: f32,
-    /// Max rows visible before scrolling.
-    pub max_visible_items: usize,
-    /// Row height in logical pixels.
-    pub row_height: f32,
-    /// Icon size in logical pixels.
+    /// Icon size in logical pixels (list rows).
     pub icon_size: f32,
     /// Tile edge length in logical pixels (used with [`Layout::Grid`]).
     pub tile_size: f32,
@@ -77,13 +74,12 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// Dark theme (default).
-    pub fn dark() -> Self {
+    /// Unstyled base values (the dark defaults). Presets layer their
+    /// embedded stylesheet over this.
+    fn base() -> Self {
         Self {
             width: 560.0,
             height: 380.0,
-            max_visible_items: 8,
-            row_height: 44.0,
             icon_size: 28.0,
             tile_size: 112.0,
             tile_radius: None,
@@ -104,82 +100,32 @@ impl Theme {
         }
     }
 
-    /// Light theme.
+    /// Dark theme (default), defined by the embedded `dark.css` stylesheet.
+    pub fn dark() -> Self {
+        let mut theme = Self::base();
+        theme
+            .apply_css(include_str!("../assets/themes/dark.css"))
+            .expect("built-in dark.css is valid");
+        theme
+    }
+
+    /// Light theme, defined by the embedded `light.css` stylesheet.
     pub fn light() -> Self {
-        Self {
-            background: Color32::from_rgb(245, 245, 248),
-            surface: Color32::WHITE,
-            selected: Color32::from_rgb(50, 110, 230),
-            text: Color32::from_rgb(20, 20, 25),
-            dim_text: Color32::from_rgb(110, 110, 125),
-            accent: Color32::from_rgb(40, 90, 220),
-            border: Color32::from_rgb(210, 210, 220),
-            ..Self::dark()
-        }
+        let mut theme = Self::base();
+        theme
+            .apply_css(include_str!("../assets/themes/light.css"))
+            .expect("built-in light.css is valid");
+        theme
     }
 
-    /// Transparent dark theme.
+    /// Transparent dark theme, defined by the embedded
+    /// `transparent_dark.css` stylesheet.
     pub fn transparent_dark() -> Self {
-        Self {
-            background: Color32::from_rgba_premultiplied(20, 20, 26, 230),
-            surface: Color32::from_rgba_premultiplied(35, 35, 45, 230),
-            ..Self::dark()
-        }
-    }
-
-    pub fn width(mut self, w: f32) -> Self {
-        self.width = w;
-        self
-    }
-    pub fn height(mut self, h: f32) -> Self {
-        self.height = h;
-        self
-    }
-    pub fn rounded(mut self, r: f32) -> Self {
-        self.corner_radius = r;
-        self
-    }
-    pub fn padding(mut self, p: f32) -> Self {
-        self.padding = p;
-        self
-    }
-    pub fn margin(mut self, m: f32) -> Self {
-        self.margin = m;
-        self
-    }
-    pub fn max_visible_items(mut self, n: usize) -> Self {
-        self.max_visible_items = n;
-        self
-    }
-    pub fn font_size(mut self, s: f32) -> Self {
-        self.font_size = s;
-        self
-    }
-    pub fn accent(mut self, c: Color32) -> Self {
-        self.accent = c;
-        self.selected = c;
-        self
-    }
-    pub fn background(mut self, c: Color32) -> Self {
-        self.background = c;
-        self
-    }
-    pub fn border(mut self, color: Color32, width: f32) -> Self {
-        self.border = color;
-        self.border_width = width;
-        self
-    }
-    pub fn show_descriptions(mut self, yes: bool) -> Self {
-        self.show_descriptions = yes;
-        self
-    }
-    pub fn tile_size(mut self, s: f32) -> Self {
-        self.tile_size = s;
-        self
-    }
-    pub fn tile_radius(mut self, r: f32) -> Self {
-        self.tile_radius = Some(r);
-        self
+        let mut theme = Self::base();
+        theme
+            .apply_css(include_str!("../assets/themes/transparent_dark.css"))
+            .expect("built-in transparent_dark.css is valid");
+        theme
     }
 
     /// Effective option corner radius: explicit override or 60% of the modal radius.
@@ -188,14 +134,14 @@ impl Theme {
     }
 
     /// Build a theme from a CSS stylesheet (see `css` module docs for the
-    /// supported selectors and properties). Starts from [`Theme::dark`].
+    /// supported selectors and properties). Starts from the dark defaults.
     ///
     /// ```no_run
     /// use quick_modals::Theme;
     /// let theme = Theme::from_css("modal { background: #18181c; border-radius: 12px; }").unwrap();
     /// ```
     pub fn from_css(css: &str) -> Result<Self, String> {
-        let mut theme = Self::dark();
+        let mut theme = Self::base();
         theme.apply_css(css)?;
         Ok(theme)
     }
@@ -210,10 +156,85 @@ impl Theme {
 mod tests {
     use super::*;
 
+    fn dark_css() -> &'static str {
+        include_str!("../assets/themes/dark.css")
+    }
+
     #[test]
-    fn margin_defaults_and_settable() {
-        assert_eq!(Theme::dark().margin, 8.0);
-        assert_eq!(Theme::dark().margin(0.0).margin, 0.0);
-        assert_eq!(Theme::dark().margin(24.0).margin, 24.0);
+    fn margin_via_css() {
+        let t = Theme::from_css("modal { margin: 0px; }").unwrap();
+        assert_eq!(t.margin, 0.0);
+        let t = Theme::from_css("modal { margin: 24px; }").unwrap();
+        assert_eq!(t.margin, 24.0);
+    }
+
+    #[test]
+    fn presets_match_expected_values() {
+        let dark = Theme::dark();
+        assert_eq!(dark.background, Color32::from_rgb(24, 24, 28));
+        assert_eq!(dark.surface, Color32::from_rgb(34, 34, 40));
+        assert_eq!(dark.text, Color32::from_rgb(235, 235, 240));
+        assert_eq!(dark.tile_radius, None);
+
+        let light = Theme::light();
+        assert_eq!(light.background, Color32::from_rgb(245, 245, 248));
+        assert_eq!(light.surface, Color32::WHITE);
+        assert_eq!(light.selected, Color32::from_rgb(50, 110, 230));
+        assert_eq!(light.text, Color32::from_rgb(20, 20, 25));
+        assert_eq!(light.dim_text, Color32::from_rgb(110, 110, 125));
+        assert_eq!(light.accent, Color32::from_rgb(40, 90, 220));
+        assert_eq!(light.border, Color32::from_rgb(210, 210, 220));
+        assert_eq!(light.border_width, 1.0);
+        assert_eq!(light.width, 560.0);
+        assert_eq!(light.height, 380.0);
+        assert_eq!(light.corner_radius, 12.0);
+        assert_eq!(light.padding, 12.0);
+        assert_eq!(light.margin, 8.0);
+        assert_eq!(light.item_spacing, 4.0);
+        assert_eq!(light.font_size, 15.0);
+        assert_eq!(light.icon_size, 28.0);
+        assert_eq!(light.tile_size, 112.0);
+        assert_eq!(light.tile_radius, None);
+        assert!(light.show_descriptions);
+
+        let td = Theme::transparent_dark();
+        assert_eq!(
+            td.background,
+            Color32::from_rgba_premultiplied(20, 20, 26, 230)
+        );
+        assert_eq!(
+            td.surface,
+            Color32::from_rgba_premultiplied(35, 35, 45, 230)
+        );
+        // Transparent presets only change translucency.
+        assert_eq!(td.text, dark.text);
+        assert_eq!(td.width, dark.width);
+    }
+
+    #[test]
+    fn preset_stylesheets_fully_specify_their_theme() {
+        // Each built-in file must carry every value that defines it:
+        // layering it over a *different* base still yields the preset.
+        let mut t = Theme::light();
+        t.apply_css(dark_css()).unwrap();
+        assert_eq!(t.background, Theme::dark().background);
+        assert_eq!(t.surface, Theme::dark().surface);
+        assert_eq!(t.selected, Theme::dark().selected);
+        assert_eq!(t.text, Theme::dark().text);
+        assert_eq!(t.dim_text, Theme::dark().dim_text);
+        assert_eq!(t.accent, Theme::dark().accent);
+        assert_eq!(t.border, Theme::dark().border);
+        assert_eq!(t.border_width, Theme::dark().border_width);
+        assert_eq!(t.width, Theme::dark().width);
+        assert_eq!(t.height, Theme::dark().height);
+        assert_eq!(t.corner_radius, Theme::dark().corner_radius);
+        assert_eq!(t.padding, Theme::dark().padding);
+        assert_eq!(t.margin, Theme::dark().margin);
+        assert_eq!(t.item_spacing, Theme::dark().item_spacing);
+        assert_eq!(t.font_size, Theme::dark().font_size);
+        assert_eq!(t.icon_size, Theme::dark().icon_size);
+        assert_eq!(t.tile_size, Theme::dark().tile_size);
+        assert_eq!(t.tile_radius, Theme::dark().tile_radius);
+        assert_eq!(t.show_descriptions, Theme::dark().show_descriptions);
     }
 }

@@ -25,6 +25,10 @@
 //! - [`SearchConfig`] + [`filter_options`] — testable filtering logic.
 //! - [`Theme`] / [`Position`] / [`Layout`] — customization.
 //!
+//! Styling is done with CSS stylesheets: [`Modal::stylesheet`] or
+//! [`Theme::from_css`] (selectors `modal`, `tile`, `tile[selected]`,
+//! `tile description`; see `Theme::from_css` for the full subset).
+//!
 //! Backend: [`eframe`]/[`egui`] borderless always-on-top window.
 //! This approximates on X11/Wayland without requiring
 //! compositor-specific layer-shell protocols.

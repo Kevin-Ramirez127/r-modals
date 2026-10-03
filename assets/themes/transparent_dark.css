@@ -1,0 +1,10 @@
+/* Built-in transparent dark theme: the dark theme with translucent
+ * window and tile fills (see `Theme::transparent_dark`). */
+
+modal {
+  background: #14141ae6;
+}
+
+tile {
+  background: #23232de6;
+}

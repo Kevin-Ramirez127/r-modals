@@ -156,13 +156,16 @@ impl ModalApp {
                                     );
                                 }
                                 ui.vertical(|ui| {
-                                    let mut rt = egui::RichText::new(&opt.label)
-                                        .size(t.font_size)
-                                        .color(t.text);
-                                    if selected {
-                                        rt = rt.strong();
-                                    }
-                                    ui.label(rt);
+                                    // NOTE: selected must not change the text
+                                    // style (e.g. `.strong()`): bold text
+                                    // measures wider/taller, so selecting a
+                                    // row would resize it and shift every row
+                                    // below it. Selection is shown by row fill.
+                                    ui.label(
+                                        egui::RichText::new(&opt.label)
+                                            .size(t.font_size)
+                                            .color(t.text),
+                                    );
                                     if t.show_descriptions {
                                         if let Some(d) = &opt.description {
                                             ui.label(
@@ -218,65 +221,81 @@ impl ModalApp {
                     .floor() as usize;
                 let cols = cols.max(1);
                 self.last_columns = cols;
-                egui::Grid::new("quick-modals-tiles")
-                    .num_columns(cols)
-                    .spacing([t.item_spacing, t.item_spacing])
-                    .show(ui, |ui| {
-                        for (pos, &opt_idx) in visible.iter().enumerate() {
-                            let opt = self.modal.options[opt_idx].clone();
-                            let selected = pos == self.cursor;
-                            let tile_resp = egui::Frame::new()
-                                .fill(if selected { t.selected } else { t.surface })
-                                .corner_radius(t.effective_tile_radius())
-                                .stroke(if selected {
-                                    egui::Stroke::new(2.0_f32, t.accent)
-                                } else {
-                                    egui::Stroke::new(t.border_width, t.border)
-                                })
-                                .inner_margin(4.0)
-                                .show(ui, |ui| {
-                                    ui.set_min_size(egui::Vec2::splat(tile));
-                                    ui.set_max_size(egui::Vec2::splat(tile));
-                                    if let Some(tex) = self.icon_texture(ctx, &opt.id, &opt.icon) {
-                                        ui.add(
-                                            egui::Image::new(&tex)
-                                                .fit_to_exact_size(egui::Vec2::splat(inner))
-                                                .corner_radius(4.0),
-                                        );
-                                    } else {
-                                        // Missing/broken image: placeholder square.
-                                        let (r, _) = ui.allocate_exact_size(
-                                            egui::Vec2::splat(inner),
+                // Center the whole grid block in the modal: a bare Grid
+                // left-aligns, leaving the slack on the right.
+                ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
+                    egui::Grid::new("quick-modals-tiles")
+                        .num_columns(cols)
+                        .spacing([t.item_spacing, t.item_spacing])
+                        .show(ui, |ui| {
+                            for (pos, &opt_idx) in visible.iter().enumerate() {
+                                let opt = self.modal.options[opt_idx].clone();
+                                let selected = pos == self.cursor;
+                                let tile_resp = egui::Frame::new()
+                                    .fill(if selected { t.selected } else { t.surface })
+                                    .corner_radius(t.effective_tile_radius())
+                                    // NOTE: selected and unselected tiles must
+                                    // share the same stroke width (only the color
+                                    // differs). A thicker selected border would
+                                    // change the tile's outer size and shift the
+                                    // neighboring tiles in the grid.
+                                    .stroke(egui::Stroke::new(
+                                        t.border_width,
+                                        if selected { t.accent } else { t.border },
+                                    ))
+                                    .inner_margin(4.0)
+                                    .show(ui, |ui| {
+                                        // Fixed tile footprint with the image
+                                        // centered inside: a top-down Ui would
+                                        // stick a smaller image to the top-left.
+                                        let (tile_rect, _) = ui.allocate_exact_size(
+                                            egui::Vec2::splat(tile),
                                             egui::Sense::hover(),
                                         );
-                                        ui.painter().rect_filled(
-                                            r,
-                                            4.0,
-                                            t.background.linear_multiply(1.4),
+                                        let img_rect = egui::Rect::from_center_size(
+                                            tile_rect.center(),
+                                            egui::Vec2::splat(inner),
                                         );
-                                    }
-                                })
-                                .response
-                                .on_hover_text(opt.label.clone());
-                            // Keyboard navigation: center the selected tile.
-                            if self.scroll_to_cursor && pos == self.cursor {
-                                tile_resp.scroll_to_me(Some(egui::Align::Center));
+                                        if let Some(tex) =
+                                            self.icon_texture(ctx, &opt.id, &opt.icon)
+                                        {
+                                            ui.put(
+                                                img_rect,
+                                                egui::Image::new(&tex)
+                                                    .fit_to_exact_size(egui::Vec2::splat(inner))
+                                                    .corner_radius(4.0),
+                                            );
+                                        } else {
+                                            // Missing/broken image: placeholder square.
+                                            ui.painter().rect_filled(
+                                                img_rect,
+                                                4.0,
+                                                t.background.linear_multiply(1.4),
+                                            );
+                                        }
+                                    })
+                                    .response
+                                    .on_hover_text(opt.label.clone());
+                                // Keyboard navigation: center the selected tile.
+                                if self.scroll_to_cursor && pos == self.cursor {
+                                    tile_resp.scroll_to_me(Some(egui::Align::Center));
+                                }
+                                // Hover takes the cursor only on fresh mouse movement,
+                                // so it never fights keyboard navigation.
+                                if tile_resp.hovered() && self.hover_fresh(ctx) {
+                                    self.cursor = pos;
+                                }
+                                if tile_resp.clicked() {
+                                    let sel = self.choose(visible, pos);
+                                    self.finish(sel, ctx);
+                                    return;
+                                }
+                                if (pos + 1) % cols == 0 || pos + 1 == visible.len() {
+                                    ui.end_row();
+                                }
                             }
-                            // Hover takes the cursor only on fresh mouse movement,
-                            // so it never fights keyboard navigation.
-                            if tile_resp.hovered() && self.hover_fresh(ctx) {
-                                self.cursor = pos;
-                            }
-                            if tile_resp.clicked() {
-                                let sel = self.choose(visible, pos);
-                                self.finish(sel, ctx);
-                                return;
-                            }
-                            if (pos + 1) % cols == 0 || pos + 1 == visible.len() {
-                                ui.end_row();
-                            }
-                        }
-                    });
+                        });
+                });
             });
         self.last_scroll_offset = out.state.offset;
         self.last_content_width = out.content_size.x;
@@ -558,7 +577,7 @@ mod tests {
         let modal = crate::Modal::new("fit")
             .layout(crate::Layout::Grid)
             .fit_width_to_content(true)
-            .theme(crate::Theme::dark().tile_size(200.0))
+            .theme(crate::Theme::from_css("tile { width: 200px; height: 200px; }").unwrap())
             .options((0..2).map(|i| {
                 crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
                     8,
@@ -596,10 +615,11 @@ mod tests {
             .layout(crate::Layout::Grid)
             .fit_width_to_content(true)
             .theme(
-                crate::Theme::dark()
-                    .rounded(12.0)
-                    .width(560.0)
-                    .tile_size(128.0),
+                crate::Theme::from_css(
+                    "modal { width: 560px; border-radius: 12px; }
+                     tile { width: 128px; height: 128px; }",
+                )
+                .unwrap(),
             )
             .options((0..6).map(|i| {
                 crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(

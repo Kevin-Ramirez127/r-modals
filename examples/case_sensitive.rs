@@ -1,4 +1,4 @@
-use quick_modals::{Modal, ModalOption, Theme};
+use quick_modals::{Modal, ModalOption};
 
 fn main() -> Result<(), String> {
     // Case-sensitive search: "firefox" will NOT match "Firefox".
@@ -10,7 +10,7 @@ fn main() -> Result<(), String> {
             ModalOption::new("2", "firefox-beta"),
             ModalOption::new("3", "FIREFOX NIGHTLY"),
         ])
-        .theme(Theme::dark().width(480.0))
+        .stylesheet("modal { width: 480px; }")
         .run()?;
 
     println!("{choice:?}");

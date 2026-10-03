@@ -1,4 +1,4 @@
-use quick_modals::{Layout, Modal, ModalOption, Theme};
+use quick_modals::{Layout, Modal, ModalOption};
 use std::path::PathBuf;
 
 /// Image files we treat as pickable.
@@ -36,7 +36,7 @@ fn main() -> Result<(), String> {
     let mut modal = Modal::new("Pick an image")
         .placeholder("Search images…")
         .layout(Layout::Grid)
-        .theme(Theme::dark().rounded(12.0).width(560.0).tile_size(128.0))
+        .stylesheet("modal { border-radius: 12px; } tile { width: 128px; height: 128px; }")
         .fit_width_to_content(true);
 
     // 1) Every image file in the directory becomes a tile.
