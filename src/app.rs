@@ -1,4 +1,4 @@
-use crate::{filter_options, IconSource, Layout, Modal, ModalSelection};
+use crate::{IconSource, Layout, Modal, ModalSelection};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -27,6 +27,24 @@ pub(crate) struct ModalApp {
     last_sent_width: f32,
     /// Column count of the last rendered grid (drives row-wise Up/Down).
     last_columns: usize,
+    /// Precomputed texture cache keys, one per option. Computing the key for
+    /// `Bytes` hashes the full image — doing that per row per frame would
+    /// re-hash megabytes at 60fps, so it happens once here.
+    icon_keys: Vec<Option<String>>,
+    /// Lowercased `label + id + description` per option, built once. The
+    /// case-insensitive filter then scans these instead of allocating two
+    /// Strings per option per keystroke.
+    lowered_haystacks: Vec<String>,
+    /// Filter cache: recomputed only when query/config changes, not per frame
+    /// (update() used to run the full filter 3x per frame).
+    filter_query: String,
+    filter_case_sensitive: bool,
+    filter_enabled: bool,
+    filter_visible: Vec<usize>,
+    filter_initialized: bool,
+    /// egui style persists across frames: applying it once avoids cloning
+    /// the full `Style` and invalidating visuals 60x/sec.
+    style_applied: bool,
 }
 
 impl ModalApp {
@@ -36,7 +54,15 @@ impl ModalApp {
         result: Arc<Mutex<Option<ModalSelection>>>,
     ) -> Self {
         let query = modal.initial_query.clone();
-        Self {
+        // One-time per-option work so per-frame rendering never hashes image
+        // bytes or (re)builds search strings.
+        let icon_keys = modal
+            .options
+            .iter()
+            .map(|o| o.icon.cache_key(&o.id))
+            .collect();
+        let lowered_haystacks = modal.options.iter().map(|o| o.haystack_lower()).collect();
+        let mut app = Self {
             modal,
             query,
             cursor: 0,
@@ -52,18 +78,67 @@ impl ModalApp {
             last_hover_pos: None,
             last_sent_width: -1.0,
             last_columns: 1,
-        }
+            icon_keys,
+            lowered_haystacks,
+            filter_query: String::new(),
+            filter_case_sensitive: false,
+            filter_enabled: true,
+            filter_visible: Vec::new(),
+            filter_initialized: false,
+            style_applied: false,
+        };
+        app.refresh_filter_cache();
+        app
     }
 
-    fn visible_indices(&self) -> Vec<usize> {
-        if !self.modal.search.enabled {
-            return (0..self.modal.options.len()).collect();
+    /// Recompute the visible list only when the query or search config
+    /// changed since the last frame. All callers in `update()` share the
+    /// cached `filter_visible` via a single clone per frame.
+    fn refresh_filter_cache(&mut self) {
+        let enabled = self.modal.search.enabled;
+        let case_sensitive = self.modal.search.case_sensitive;
+        if self.filter_initialized
+            && self.filter_query == self.query
+            && self.filter_case_sensitive == case_sensitive
+            && self.filter_enabled == enabled
+        {
+            return;
         }
-        filter_options(
-            &self.modal.options,
-            &self.query,
-            self.modal.search.case_sensitive,
-        )
+        // Empty query (or disabled search) lists everything, including
+        // `unsearchable` rows — same contract as `filter_options`.
+        // (`query` is cloned first so the scan below holds no borrow of
+        // `self` while writing `filter_visible`.)
+        let query = self.query.clone();
+        if !enabled || query.is_empty() {
+            self.filter_visible = (0..self.modal.options.len()).collect();
+        } else if case_sensitive {
+            self.filter_visible = self
+                .modal
+                .options
+                .iter()
+                .enumerate()
+                .filter(|(_, o)| o.matches_query(&query, "", true))
+                .map(|(i, _)| i)
+                .collect();
+        } else {
+            let q = query.to_lowercase();
+            self.filter_visible = self
+                .lowered_haystacks
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| h.contains(&q))
+                .map(|(i, _)| i)
+                .collect();
+        }
+        self.filter_query = self.query.clone();
+        self.filter_case_sensitive = case_sensitive;
+        self.filter_enabled = enabled;
+        self.filter_initialized = true;
+    }
+
+    fn visible_indices(&mut self) -> Vec<usize> {
+        self.refresh_filter_cache();
+        self.filter_visible.clone()
     }
 
     fn choose(&self, visible: &[usize], pos: usize) -> Option<ModalSelection> {
@@ -84,25 +159,19 @@ impl ModalApp {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
     }
 
-    /// True when the pointer moved since the last frame: only fresh mouse
-    /// movement may take the cursor away from keyboard navigation.
-    fn hover_fresh(&self, ctx: &egui::Context) -> bool {
-        ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos
-    }
-
     fn icon_texture(
-        &mut self,
+        textures: &mut HashMap<String, egui::TextureHandle>,
         ctx: &egui::Context,
-        option_id: &str,
+        key: Option<&String>,
         icon: &IconSource,
     ) -> Option<egui::TextureHandle> {
-        let key = icon.cache_key(option_id)?;
-        if let Some(t) = self.textures.get(&key) {
+        let key = key?;
+        if let Some(t) = textures.get(key) {
             return Some(t.clone());
         }
         let img = load_icon(icon)?;
-        let tex = ctx.load_texture(&key, img, egui::TextureOptions::LINEAR);
-        self.textures.insert(key.clone(), tex.clone());
+        let tex = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
+        textures.insert(key.clone(), tex.clone());
         Some(tex)
     }
 
@@ -113,30 +182,48 @@ impl ModalApp {
         ui: &mut egui::Ui,
         visible: &[usize],
         t: &crate::Theme,
+        hover_fresh: bool,
     ) {
+        // Disjoint field borrows: rendering needs `textures` mutably while
+        // reading `modal`/`icon_keys` — borrowing whole `self` for the
+        // option (`self.modal.options[i].clone()`) would clone every icon's
+        // `Vec<u8>` per row per frame, so we never hold an owned option.
+        let modal = &self.modal;
+        let textures = &mut self.textures;
+        let icon_keys = &self.icon_keys;
+        let cursor = &mut self.cursor;
+        let scroll_to_cursor = self.scroll_to_cursor;
+        let query = self.query.clone();
+        let tile_radius = t.effective_tile_radius();
+        let mut clicked: Option<ModalSelection> = None;
         let out = egui::ScrollArea::vertical()
             .max_height(t.height - 110.0)
             .auto_shrink([false, true])
             .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = t.item_spacing;
                 for (pos, &opt_idx) in visible.iter().enumerate() {
-                    let opt = &self.modal.options[opt_idx].clone();
-                    let selected = pos == self.cursor;
+                    let opt = &modal.options[opt_idx];
+                    let selected = pos == *cursor;
                     let row_fill = if selected { t.selected } else { t.surface };
 
                     let row = egui::Frame::new()
                         .fill(row_fill)
-                        .corner_radius(t.effective_tile_radius())
+                        .corner_radius(tile_radius)
                         .inner_margin(egui::Margin::symmetric(8, 6))
                         .show(ui, |ui| {
                             // Stretch rows full-width, unless fitting the
                             // window to the content (then rows size to text).
-                            if !self.modal.fit_width_to_content {
+                            if !modal.fit_width_to_content {
                                 ui.set_width(ui.available_width());
                             }
                             ui.horizontal(|ui| {
                                 // Icon (cached texture or placeholder box).
-                                let tex = self.icon_texture(ctx, &opt.id, &opt.icon);
+                                let tex = Self::icon_texture(
+                                    textures,
+                                    ctx,
+                                    icon_keys[opt_idx].as_ref(),
+                                    &opt.icon,
+                                );
                                 if let Some(tex) = tex {
                                     ui.add(
                                         egui::Image::new(&tex)
@@ -180,23 +267,30 @@ impl ModalApp {
                         });
 
                     // Keyboard navigation: center the selected row.
-                    if self.scroll_to_cursor && pos == self.cursor {
+                    if scroll_to_cursor && pos == *cursor {
                         row.response.scroll_to_me(Some(egui::Align::Center));
                     }
                     // Click + hover select (hover only on fresh mouse
                     // movement, so it never fights keyboard navigation).
-                    if row.response.hovered() && self.hover_fresh(ctx) {
-                        self.cursor = pos;
+                    if row.response.hovered() && hover_fresh {
+                        *cursor = pos;
                     }
                     if row.response.clicked() {
-                        let sel = self.choose(visible, pos);
-                        self.finish(sel, ctx);
-                        return;
+                        clicked = Some(ModalSelection {
+                            id: opt.id.clone(),
+                            label: opt.label.clone(),
+                            index: opt_idx,
+                            query: query.clone(),
+                        });
+                        break;
                     }
                 }
             });
         self.last_scroll_offset = out.state.offset;
         self.last_content_width = out.content_size.x;
+        if let Some(sel) = clicked {
+            self.finish(Some(sel), ctx);
+        }
     }
 
     /// Grid squares: each tile IS the image (no text, tooltip shows the label).
@@ -206,9 +300,20 @@ impl ModalApp {
         ui: &mut egui::Ui,
         visible: &[usize],
         t: &crate::Theme,
+        hover_fresh: bool,
     ) {
         let tile = t.tile_size;
         let inner = (tile - 8.0).max(16.0);
+        let tile_radius = t.effective_tile_radius();
+        // `cols` is written during layout but read by keyboard nav next frame.
+        let mut cols_out = 1usize;
+        let modal = &self.modal;
+        let textures = &mut self.textures;
+        let icon_keys = &self.icon_keys;
+        let cursor = &mut self.cursor;
+        let scroll_to_cursor = self.scroll_to_cursor;
+        let query = self.query.clone();
+        let mut clicked: Option<ModalSelection> = None;
         let out = egui::ScrollArea::vertical()
             .max_height(t.height - 110.0)
             .auto_shrink([false, true])
@@ -220,7 +325,7 @@ impl ModalApp {
                 let cols = ((ui.available_width() + t.item_spacing) / (outer + t.item_spacing))
                     .floor() as usize;
                 let cols = cols.max(1);
-                self.last_columns = cols;
+                cols_out = cols;
                 // Center the whole grid block in the modal: a bare Grid
                 // left-aligns, leaving the slack on the right.
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
@@ -229,11 +334,11 @@ impl ModalApp {
                         .spacing([t.item_spacing, t.item_spacing])
                         .show(ui, |ui| {
                             for (pos, &opt_idx) in visible.iter().enumerate() {
-                                let opt = self.modal.options[opt_idx].clone();
-                                let selected = pos == self.cursor;
+                                let opt = &modal.options[opt_idx];
+                                let selected = pos == *cursor;
                                 let tile_resp = egui::Frame::new()
                                     .fill(if selected { t.selected } else { t.surface })
-                                    .corner_radius(t.effective_tile_radius())
+                                    .corner_radius(tile_radius)
                                     // NOTE: selected and unselected tiles must
                                     // share the same stroke width (only the color
                                     // differs). A thicker selected border would
@@ -256,9 +361,12 @@ impl ModalApp {
                                             tile_rect.center(),
                                             egui::Vec2::splat(inner),
                                         );
-                                        if let Some(tex) =
-                                            self.icon_texture(ctx, &opt.id, &opt.icon)
-                                        {
+                                        if let Some(tex) = Self::icon_texture(
+                                            textures,
+                                            ctx,
+                                            icon_keys[opt_idx].as_ref(),
+                                            &opt.icon,
+                                        ) {
                                             ui.put(
                                                 img_rect,
                                                 egui::Image::new(&tex)
@@ -275,20 +383,24 @@ impl ModalApp {
                                         }
                                     })
                                     .response
-                                    .on_hover_text(opt.label.clone());
+                                    .on_hover_text(&opt.label);
                                 // Keyboard navigation: center the selected tile.
-                                if self.scroll_to_cursor && pos == self.cursor {
+                                if scroll_to_cursor && pos == *cursor {
                                     tile_resp.scroll_to_me(Some(egui::Align::Center));
                                 }
                                 // Hover takes the cursor only on fresh mouse movement,
                                 // so it never fights keyboard navigation.
-                                if tile_resp.hovered() && self.hover_fresh(ctx) {
-                                    self.cursor = pos;
+                                if tile_resp.hovered() && hover_fresh {
+                                    *cursor = pos;
                                 }
                                 if tile_resp.clicked() {
-                                    let sel = self.choose(visible, pos);
-                                    self.finish(sel, ctx);
-                                    return;
+                                    clicked = Some(ModalSelection {
+                                        id: opt.id.clone(),
+                                        label: opt.label.clone(),
+                                        index: opt_idx,
+                                        query: query.clone(),
+                                    });
+                                    break;
                                 }
                                 if (pos + 1) % cols == 0 || pos + 1 == visible.len() {
                                     ui.end_row();
@@ -297,8 +409,12 @@ impl ModalApp {
                         });
                 });
             });
+        self.last_columns = cols_out;
         self.last_scroll_offset = out.state.offset;
         self.last_content_width = out.content_size.x;
+        if let Some(sel) = clicked {
+            self.finish(Some(sel), ctx);
+        }
     }
 }
 
@@ -328,6 +444,16 @@ fn load_icon(icon: &IconSource) -> Option<egui::ColorImage> {
 
 fn decode_bytes(bytes: &[u8]) -> Option<egui::ColorImage> {
     let dyn_img = image::load_from_memory(bytes).ok()?;
+    // Downscale once at decode time: icons render at `icon_size` (28px) and
+    // grid tiles at <= 200px, so uploading a 4000px photo as a GPU texture
+    // wastes memory, upload bandwidth, and sampler cost every frame it is
+    // drawn. 256px keeps 2x headroom for HiDPI tiles.
+    const MAX_EDGE: u32 = 256;
+    let dyn_img = if dyn_img.width() > MAX_EDGE || dyn_img.height() > MAX_EDGE {
+        dyn_img.thumbnail(MAX_EDGE, MAX_EDGE)
+    } else {
+        dyn_img
+    };
     let rgba = dyn_img.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
     Some(egui::ColorImage::from_rgba_unmultiplied(
@@ -703,12 +829,27 @@ impl eframe::App for ModalApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let t = self.modal.theme.clone();
 
-        // Global keys.
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        // Global keys — consumed under a single input lock instead of one
+        // lock per key.
+        let (esc, down, right, up, left, enter) = ctx.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+            )
+        });
+        if esc {
             self.finish(None, ctx);
             return;
         }
 
+        // Single filtered-list computation per frame: the cache refreshes
+        // only when the query/config changed, and this clone is the only
+        // per-frame allocation (a `Vec<usize>` memcpy, not per-option
+        // Strings). It is also reused for the fit-to-content check below.
         let visible = self.visible_indices();
         if self.cursor >= visible.len() {
             self.cursor = visible.len().saturating_sub(1);
@@ -718,9 +859,7 @@ impl eframe::App for ModalApp {
         let grid = matches!(self.modal.layout, Layout::Grid);
         let row_step = if grid { self.last_columns.max(1) } else { 1 };
 
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown))
-            && !visible.is_empty()
-        {
+        if down && !visible.is_empty() {
             self.cursor = if grid {
                 (self.cursor + row_step).min(visible.len() - 1)
             } else {
@@ -728,15 +867,11 @@ impl eframe::App for ModalApp {
             };
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight))
-            && !visible.is_empty()
-        {
+        if right && !visible.is_empty() {
             self.cursor = (self.cursor + 1) % visible.len();
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp))
-            && !visible.is_empty()
-        {
+        if up && !visible.is_empty() {
             self.cursor = if grid {
                 self.cursor.saturating_sub(row_step)
             } else {
@@ -744,27 +879,35 @@ impl eframe::App for ModalApp {
             };
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft))
-            && !visible.is_empty()
-        {
+        if left && !visible.is_empty() {
             self.cursor = self.cursor.checked_sub(1).unwrap_or(visible.len() - 1);
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
-        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter)) {
+        if enter {
             let sel = self.choose(&visible, self.cursor);
             self.finish(sel, ctx);
             return;
         }
 
-        // Styling.
-        let mut style = (*ctx.style()).clone();
-        style.visuals.window_fill = t.background;
-        style.visuals.panel_fill = t.background;
-        style.visuals.selection.bg_fill = t.selected;
-        style.visuals.widgets.inactive.bg_fill = t.surface;
-        style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
-        style.visuals.widgets.active.bg_fill = t.selected;
-        ctx.set_style(style);
+        // Styling. egui retains the style across frames, so set it once:
+        // cloning + installing the whole `Style` every frame invalidates
+        // visuals at 60Hz for a theme that never changes mid-modal.
+        if !self.style_applied {
+            let mut style = (*ctx.style()).clone();
+            style.visuals.window_fill = t.background;
+            style.visuals.panel_fill = t.background;
+            style.visuals.selection.bg_fill = t.selected;
+            style.visuals.widgets.inactive.bg_fill = t.surface;
+            style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
+            style.visuals.widgets.active.bg_fill = t.selected;
+            ctx.set_style(style);
+            self.style_applied = true;
+        }
+
+        // One input poll per frame; rows/tiles receive the bool instead of
+        // each locking `ctx.input` themselves (O(n) locks per frame).
+        let hover_fresh =
+            ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos;
 
         let frame = egui::Frame::new()
             .fill(t.background)
@@ -799,6 +942,9 @@ impl eframe::App for ModalApp {
                 self.focused_once = true;
             }
 
+            // NOTE: `visible` was computed before the search field could
+            // edit `query` this frame; refresh so the list never lags one
+            // frame behind typing.
             let visible = self.visible_indices();
             if visible.is_empty() {
                 ui.colored_label(t.dim_text, "No matches");
@@ -806,9 +952,9 @@ impl eframe::App for ModalApp {
             }
 
             if matches!(self.modal.layout, Layout::Grid) {
-                self.show_grid(ctx, ui, &visible, &t);
+                self.show_grid(ctx, ui, &visible, &t, hover_fresh);
             } else {
-                self.show_list(ctx, ui, &visible, &t);
+                self.show_list(ctx, ui, &visible, &t, hover_fresh);
             }
         });
 
@@ -820,9 +966,13 @@ impl eframe::App for ModalApp {
         // put for consecutive updates first: the first multi-pass layouts
         // report transient widths that must never resize the window.
         // Skipped until the first real measurement so it never flashes narrow.
+        // The search field may have edited `query` inside the panel above,
+        // so re-check the cache (no clone: emptiness only) instead of
+        // reusing the pre-edit `visible`.
+        self.refresh_filter_cache();
         if self.modal.fit_width_to_content
             && self.last_content_width > 0.0
-            && !self.visible_indices().is_empty()
+            && !self.filter_visible.is_empty()
         {
             if (self.last_content_width - self.fit_candidate).abs() <= 1.0 {
                 self.fit_stable_frames += 1;
@@ -845,7 +995,9 @@ impl eframe::App for ModalApp {
         }
         self.last_hover_pos = ctx.input(|i| i.pointer.hover_pos());
 
-        // Keep repainting for focus / texture readiness.
-        ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        // No blanket `request_repaint_after`: that kept the app waking 5x/sec
+        // at idle (CPU/battery). egui already repaints on input, focus, and
+        // scroll-animation frames; textures appear on the frame their
+        // `load_texture` completes.
     }
 }

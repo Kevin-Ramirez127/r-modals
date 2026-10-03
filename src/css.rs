@@ -46,16 +46,25 @@ enum Target {
 }
 
 fn target_of(selector: &str) -> Result<Target, String> {
-    match selector.trim().to_ascii_lowercase().as_str() {
-        "modal" => Ok(Target::Modal),
-        "tile" => Ok(Target::Tile),
-        "tile icon" => Ok(Target::TileIcon),
-        "tile[selected]" => Ok(Target::TileSelected),
-        "tile description" => Ok(Target::TileDescription),
-        other => Err(format!(
-            "unsupported selector {other:?}; supported: modal, tile, `tile icon`, tile[selected], `tile description`"
-        )),
+    let s = selector.trim();
+    if s.eq_ignore_ascii_case("modal") {
+        return Ok(Target::Modal);
     }
+    if s.eq_ignore_ascii_case("tile") {
+        return Ok(Target::Tile);
+    }
+    if s.eq_ignore_ascii_case("tile icon") {
+        return Ok(Target::TileIcon);
+    }
+    if s.eq_ignore_ascii_case("tile[selected]") {
+        return Ok(Target::TileSelected);
+    }
+    if s.eq_ignore_ascii_case("tile description") {
+        return Ok(Target::TileDescription);
+    }
+    Err(format!(
+        "unsupported selector {s:?}; supported: modal, tile, `tile icon`, tile[selected], `tile description`"
+    ))
 }
 
 /// Apply a CSS stylesheet on top of `theme` (see module docs for the subset).
@@ -342,17 +351,22 @@ fn is_square_size(target: Target, decl: &Property) -> bool {
 /// Tiles and icons are square: `width`/`height` must match when both are
 /// given (a single dimension is enough). Last one wins per pass.
 fn apply_square_size(theme: &mut Theme, target: Target, decls: &[Property]) -> Result<(), String> {
-    let (name, set): (&str, fn(&mut Theme, f32)) = match target {
-        Target::Tile => ("tile", |t, v| t.tile_size = v),
-        Target::TileIcon => ("tile icon", |t, v| t.icon_size = v),
+    let (name, width_what, height_what, set): (&str, &str, &str, fn(&mut Theme, f32)) = match target {
+        Target::Tile => ("tile", "tile width", "tile height", |t, v| t.tile_size = v),
+        Target::TileIcon => (
+            "tile icon",
+            "tile icon width",
+            "tile icon height",
+            |t, v| t.icon_size = v,
+        ),
         _ => return Ok(()),
     };
     let mut width = None;
     let mut height = None;
     for decl in decls {
         match decl {
-            Property::Width(s) => width = size_px(s, &format!("{name} width"))?,
-            Property::Height(s) => height = size_px(s, &format!("{name} height"))?,
+            Property::Width(s) => width = size_px(s, width_what)?,
+            Property::Height(s) => height = size_px(s, height_what)?,
             _ => {}
         }
     }

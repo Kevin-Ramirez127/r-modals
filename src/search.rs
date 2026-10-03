@@ -28,6 +28,10 @@ impl Default for SearchConfig {
 ///
 /// Substring match over label + id + description.
 /// Returns indices into `options`, preserving order.
+///
+/// The query is lowered once here; each option is checked field-by-field
+/// with early exit (label hit skips id/description), so matching options
+/// cost a single short `to_lowercase` instead of a full haystack build.
 pub fn filter_options(options: &[ModalOption], query: &str, case_sensitive: bool) -> Vec<usize> {
     if query.is_empty() {
         return (0..options.len()).collect();
@@ -36,7 +40,7 @@ pub fn filter_options(options: &[ModalOption], query: &str, case_sensitive: bool
         options
             .iter()
             .enumerate()
-            .filter(|(_, o)| !o.unsearchable && o.haystack().contains(query))
+            .filter(|(_, o)| o.matches_query(query, "", true))
             .map(|(i, _)| i)
             .collect()
     } else {
@@ -44,7 +48,7 @@ pub fn filter_options(options: &[ModalOption], query: &str, case_sensitive: bool
         options
             .iter()
             .enumerate()
-            .filter(|(_, o)| !o.unsearchable && o.haystack().to_lowercase().contains(&q))
+            .filter(|(_, o)| o.matches_query(query, &q, false))
             .map(|(i, _)| i)
             .collect()
     }

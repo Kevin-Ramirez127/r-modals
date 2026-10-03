@@ -1,4 +1,5 @@
 use egui::Color32;
+use std::sync::OnceLock;
 
 /// Where to place the modal window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -101,31 +102,23 @@ impl Theme {
     }
 
     /// Dark theme (default), defined by the embedded `dark.css` stylesheet.
+    /// The parsed preset is cached process-wide: every `Modal::new` used to
+    /// re-parse the CSS via `lightningcss`.
     pub fn dark() -> Self {
-        let mut theme = Self::base();
-        theme
-            .apply_css(include_str!("../assets/themes/dark.css"))
-            .expect("built-in dark.css is valid");
-        theme
+        dark_preset().clone()
     }
 
     /// Light theme, defined by the embedded `light.css` stylesheet.
+    /// Parsed once and cached (see [`Theme::dark`]).
     pub fn light() -> Self {
-        let mut theme = Self::base();
-        theme
-            .apply_css(include_str!("../assets/themes/light.css"))
-            .expect("built-in light.css is valid");
-        theme
+        light_preset().clone()
     }
 
     /// Transparent dark theme, defined by the embedded
     /// `transparent_dark.css` stylesheet.
+    /// Parsed once and cached (see [`Theme::dark`]).
     pub fn transparent_dark() -> Self {
-        let mut theme = Self::base();
-        theme
-            .apply_css(include_str!("../assets/themes/transparent_dark.css"))
-            .expect("built-in transparent_dark.css is valid");
-        theme
+        transparent_dark_preset().clone()
     }
 
     /// Effective option corner radius: explicit override or 60% of the modal radius.
@@ -150,6 +143,39 @@ impl Theme {
     pub fn apply_css(&mut self, css: &str) -> Result<(), String> {
         crate::css::apply_css(self, css)
     }
+}
+
+fn dark_preset() -> &'static Theme {
+    static DARK: OnceLock<Theme> = OnceLock::new();
+    DARK.get_or_init(|| {
+        let mut theme = Theme::base();
+        theme
+            .apply_css(include_str!("../assets/themes/dark.css"))
+            .expect("built-in dark.css is valid");
+        theme
+    })
+}
+
+fn light_preset() -> &'static Theme {
+    static LIGHT: OnceLock<Theme> = OnceLock::new();
+    LIGHT.get_or_init(|| {
+        let mut theme = Theme::base();
+        theme
+            .apply_css(include_str!("../assets/themes/light.css"))
+            .expect("built-in light.css is valid");
+        theme
+    })
+}
+
+fn transparent_dark_preset() -> &'static Theme {
+    static TD: OnceLock<Theme> = OnceLock::new();
+    TD.get_or_init(|| {
+        let mut theme = Theme::base();
+        theme
+            .apply_css(include_str!("../assets/themes/transparent_dark.css"))
+            .expect("built-in transparent_dark.css is valid");
+        theme
+    })
 }
 
 #[cfg(test)]

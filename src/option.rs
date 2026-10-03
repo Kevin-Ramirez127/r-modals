@@ -23,6 +23,10 @@ pub enum IconSource {
 
 impl IconSource {
     /// Stable cache key for the egui texture cache.
+    ///
+    /// NOTE: this can hash full image bytes — call it once per option and
+    /// reuse the result (see `ModalApp::icon_keys`). Calling it per frame
+    /// would re-hash megabytes of pixel data at 60fps.
     pub(crate) fn cache_key(&self, option_id: &str) -> Option<String> {
         match self {
             IconSource::None => None,
@@ -33,8 +37,20 @@ impl IconSource {
                 b.hash(&mut h);
                 h.finish()
             })),
-            IconSource::Pixels { width, height, .. } => {
-                Some(format!("icon:{option_id}:px:{width}x{height}"))
+            IconSource::Pixels {
+                width,
+                height,
+                rgba,
+            } => {
+                // Include a content hash: same dims + same id but different
+                // pixels must not share a stale texture.
+                use std::hash::{Hash, Hasher};
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                rgba.hash(&mut h);
+                Some(format!(
+                    "icon:{option_id}:px:{width}x{height}:{:x}",
+                    h.finish()
+                ))
             }
         }
     }
@@ -127,10 +143,45 @@ impl ModalOption {
     }
 
     /// Text haystack used for filtering (label + id + description).
+    /// Prefer [`ModalOption::matches_query`] in hot paths: it checks each
+    /// field separately and short-circuits, avoiding this allocation.
     pub(crate) fn haystack(&self) -> String {
         match &self.description {
             Some(d) => format!("{} {} {}", self.label, self.id, d),
             None => format!("{} {}", self.label, self.id),
+        }
+    }
+
+    /// Lowercased haystack, precomputed once per modal for the
+    /// case-insensitive fast path (see `ModalApp` filter cache).
+    pub(crate) fn haystack_lower(&self) -> String {
+        self.haystack().to_lowercase()
+    }
+
+    /// Substring match over label + id + description without building the
+    /// combined haystack. Case-insensitive callers pass the already-lowered
+    /// query; each field is lowered lazily and checked in order so a label
+    /// hit skips the id/description work entirely.
+    pub(crate) fn matches_query(&self, query: &str, query_lower: &str, case_sensitive: bool) -> bool {
+        if self.unsearchable {
+            return false;
+        }
+        if case_sensitive {
+            self.label.contains(query)
+                || self.id.contains(query)
+                || self
+                    .description
+                    .as_deref()
+                    .is_some_and(|d| d.contains(query))
+        } else {
+            // `to_lowercase` allocates; do it field-by-field with early exit
+            // so a label match never touches id/description.
+            self.label.to_lowercase().contains(query_lower)
+                || self.id.to_lowercase().contains(query_lower)
+                || self
+                    .description
+                    .as_deref()
+                    .is_some_and(|d| d.to_lowercase().contains(query_lower))
         }
     }
 }
