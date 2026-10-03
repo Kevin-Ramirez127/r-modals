@@ -2,6 +2,11 @@ use crate::{IconSource, Layout, Modal, ModalSelection};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// Retry budget for fit-to-content resizes (frames). Covers the startup
+/// race where the window manager drops the first `InnerSize` while the
+/// window is still mapping, plus the frames the cascade needs to settle.
+const MAX_FIT_SENDS: u32 = 60;
+
 pub(crate) struct ModalApp {
     modal: Modal,
     query: String,
@@ -25,8 +30,18 @@ pub(crate) struct ModalApp {
     last_hover_pos: Option<egui::Pos2>,
     /// Width last sent via an `InnerSize` viewport command.
     last_sent_width: f32,
+    /// Sends used for the current fit target. The first resize can be lost
+    /// while the window is still mapping; without retries the send-once
+    /// dedup stuck the modal wide (grid centered with side margins).
+    fit_send_attempts: u32,
     /// Column count of the last rendered grid (drives row-wise Up/Down).
     last_columns: usize,
+    /// Grid column count measured with the full (unfiltered) list. While a
+    /// filter is active the layout reuses this instead of recomputing from
+    /// the current available width — filtering narrows the measured content,
+    /// which (with fit-to-content) narrows the window, which recomputes
+    /// fewer columns and traps the restored full list in that narrow grid.
+    remembered_columns: Option<usize>,
     /// Precomputed texture cache keys, one per option. Computing the key for
     /// `Bytes` hashes the full image — doing that per row per frame would
     /// re-hash megabytes at 60fps, so it happens once here.
@@ -77,7 +92,9 @@ impl ModalApp {
             fit_stable_frames: 0,
             last_hover_pos: None,
             last_sent_width: -1.0,
+            fit_send_attempts: 0,
             last_columns: 1,
+            remembered_columns: None,
             icon_keys,
             lowered_haystacks,
             filter_query: String::new(),
@@ -306,6 +323,10 @@ impl ModalApp {
         let inner = (tile - 8.0).max(16.0);
         let tile_radius = t.effective_tile_radius();
         // `cols` is written during layout but read by keyboard nav next frame.
+        // `full_list` decides whether the measurement is worth remembering:
+        // only the unfiltered grid reflects the real window width.
+        let full_list = visible.len() == self.modal.options.len();
+        let remembered = self.remembered_columns;
         let mut cols_out = 1usize;
         let modal = &self.modal;
         let textures = &mut self.textures;
@@ -321,10 +342,20 @@ impl ModalApp {
                 // Explicit columns from available width. NOTE: `horizontal_wrapped`
                 // does not wrap `Frame` tiles (they size unbounded and run off the
                 // right edge, clipped and unreachable), so a Grid is required.
+                // While filtered, reuse the remembered full-list count: the
+                // filtered content is narrower, and recomputing from it would
+                // collapse the grid (e.g. to 2 columns) and stick there after
+                // the filter is cleared.
                 let outer = tile + 8.0; // tile + Frame inner_margin on both sides
-                let cols = ((ui.available_width() + t.item_spacing) / (outer + t.item_spacing))
+                let computed = ((ui.available_width() + t.item_spacing)
+                    / (outer + t.item_spacing))
                     .floor() as usize;
-                let cols = cols.max(1);
+                let computed = computed.max(1);
+                let cols = if full_list {
+                    computed
+                } else {
+                    remembered.unwrap_or(computed)
+                };
                 cols_out = cols;
                 // Center the whole grid block in the modal: a bare Grid
                 // left-aligns, leaving the slack on the right.
@@ -410,6 +441,9 @@ impl ModalApp {
                 });
             });
         self.last_columns = cols_out;
+        if full_list {
+            self.remembered_columns = Some(cols_out);
+        }
         self.last_scroll_offset = out.state.offset;
         self.last_content_width = out.content_size.x;
         if let Some(sel) = clicked {
@@ -507,10 +541,14 @@ mod tests {
     }
 
     fn headless_input(time: f64) -> egui::RawInput {
+        headless_input_w(time, 600.0)
+    }
+
+    fn headless_input_w(time: f64, width: f32) -> egui::RawInput {
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
-                egui::vec2(600.0, 500.0),
+                egui::vec2(width, 500.0),
             )),
             time: Some(time),
             ..Default::default()
@@ -798,6 +836,134 @@ mod tests {
         assert_eq!(app.cursor, 0);
     }
 
+    fn fit_grid_app() -> (egui::Context, ModalApp, eframe::Frame) {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let modal = crate::Modal::new("grid")
+            .layout(crate::Layout::Grid)
+            .fit_width_to_content(true)
+            .options((0..30).map(|i| {
+                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
+                    8,
+                    8,
+                    vec![200; 8 * 8 * 4],
+                )
+            }));
+        let result = Arc::new(Mutex::new(None));
+        let app = ModalApp::new(&cc, modal, result);
+        let frame = eframe::Frame::_new_kittest();
+        (ctx, app, frame)
+    }
+
+    /// Regression: filtering a fit-to-content grid must not shrink the
+    /// window, and clearing the filter must restore the initial columns.
+    /// Previously the window shrank to the filtered content, recomputed
+    /// e.g. 2 columns, and the narrow window trapped the restored full
+    /// list in that 2-column grid.
+    #[test]
+    fn grid_filter_keeps_window_and_restores_columns() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = fit_grid_app();
+        let mut t = 0.0;
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        let initial = app.last_columns;
+        assert!(initial >= 2, "need multiple columns, got {initial}");
+        let settled = app.last_sent_width;
+        assert!(settled > 0.0, "expected the fit window to settle");
+        // Filter down to a single tile ("Item 29" matches nothing else).
+        app.query = "Item 29".to_string();
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            sizes.extend(inner_sizes(&out));
+        }
+        assert_eq!(app.filter_visible.len(), 1);
+        assert_eq!(
+            app.last_columns, initial,
+            "columns must not collapse while filtered"
+        );
+        for s in &sizes {
+            assert!(
+                s.x >= settled - 1.0,
+                "filter must not shrink the window: settled={settled} sizes={sizes:?}"
+            );
+        }
+        // Clearing the filter restores the full grid at its initial width.
+        app.query.clear();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        assert_eq!(app.filter_visible.len(), 30);
+        assert_eq!(
+            app.last_columns, initial,
+            "clearing the filter must restore the initial columns"
+        );
+    }
+
+    /// While filtered, the grid reuses the remembered full-list columns
+    /// even if the available width narrows (e.g. the fitted window was
+    /// briefly narrow): the layout must not get stuck at 2 columns.
+    #[test]
+    fn grid_reuses_initial_columns_when_narrowed_while_filtered() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = fit_grid_app();
+        let mut t = 0.0;
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        let initial = app.last_columns;
+        assert!(initial >= 2, "need multiple columns, got {initial}");
+        // Narrow viewport + active filter: columns must hold.
+        app.query = "Item 29".to_string();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input_w(t, 340.0), |ctx| {
+                app.update(ctx, &mut frame)
+            });
+        }
+        assert_eq!(
+            app.last_columns, initial,
+            "filtered grid must reuse the remembered columns"
+        );
+    }
+
+    /// Fit must retry the resize until the window actually matches: the
+    /// first `InnerSize` can be lost while the window is still mapping, and
+    /// send-once dedup then stuck the modal wide (grid centered with side
+    /// margins). Headless the window never applies it (stays 600px), so
+    /// every settled frame must re-send the same target width.
+    #[test]
+    fn fit_retries_resize_until_window_matches() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame) = fit_grid_app();
+        // fit_grid_app uses 112px tiles: target width is below 600px, so the
+        // (never-applied, headless) resize must be re-sent, not sent once.
+        let mut t = 0.0;
+        let mut sizes = Vec::new();
+        for _ in 0..6 {
+            t += 1.0 / 60.0;
+            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+            sizes.extend(inner_sizes(&out));
+        }
+        assert!(
+            sizes.len() >= 4,
+            "expected the fit resize to be retried while unapplied, got {sizes:?}"
+        );
+        let first = sizes[0].x;
+        for s in &sizes {
+            assert!(
+                (s.x - first).abs() <= 1.0,
+                "retries must repeat the same target, got {sizes:?}"
+            );
+        }
+    }
+
     /// …but a stationary pointer never overrides keyboard navigation.
     #[test]
     fn stationary_pointer_does_not_block_keyboard() {
@@ -969,9 +1135,14 @@ impl eframe::App for ModalApp {
         // The search field may have edited `query` inside the panel above,
         // so re-check the cache (no clone: emptiness only) instead of
         // reusing the pre-edit `visible`.
+        // Fit to the FULL list only: a filtered subset measures narrower,
+        // which would shrink the window, recompute fewer grid columns, and
+        // trap the restored full list in that narrow layout after clearing.
         self.refresh_filter_cache();
+        let full_list = self.filter_visible.len() == self.modal.options.len();
         if self.modal.fit_width_to_content
             && self.last_content_width > 0.0
+            && full_list
             && !self.filter_visible.is_empty()
         {
             if (self.last_content_width - self.fit_candidate).abs() <= 1.0 {
@@ -984,14 +1155,40 @@ impl eframe::App for ModalApp {
                 let want = (self.last_content_width + t.padding * 2.0 + t.margin * 2.0)
                     .clamp(320.0, t.width);
                 if (want - self.last_sent_width).abs() > 1.0 {
+                    // New target: fresh retry budget.
                     self.last_sent_width = want;
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
-                        want, t.height,
-                    )));
+                    self.fit_send_attempts = 0;
                 }
+                if (ctx.screen_rect().width() - want).abs() <= 1.0 {
+                    // Window manager applied it: nothing to do.
+                    self.fit_send_attempts = 0;
+                } else {
+                    if self.fit_send_attempts < MAX_FIT_SENDS {
+                        self.fit_send_attempts += 1;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(
+                            want, t.height,
+                        )));
+                    }
+                    // else: the WM keeps ignoring us (e.g. a tiling
+                    // compositor) — stop sending instead of spamming.
+                    if self.fit_send_attempts < MAX_FIT_SENDS {
+                        // Keep frames coming until the resize lands. The
+                        // first `InnerSize` can be lost while the window is
+                        // still mapping; with send-once dedup that stuck the
+                        // modal at full width with the grid centered in side
+                        // margins. Bounded: stops once applied or exhausted.
+                        ctx.request_repaint();
+                    }
+                }
+            } else if self.fit_send_attempts < MAX_FIT_SENDS {
+                // Measurement not settled yet — make sure the next frame
+                // comes so it can settle (same bound, can't spin forever).
+                self.fit_send_attempts += 1;
+                ctx.request_repaint();
             }
         } else {
             self.fit_stable_frames = 0;
+            self.fit_send_attempts = 0;
         }
         self.last_hover_pos = ctx.input(|i| i.pointer.hover_pos());
 

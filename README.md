@@ -12,7 +12,7 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
 - **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image; keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
 - **Styling is CSS-only** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); no builder functions. Selectors: `modal`, `tile` (+`width`/`height`, `tile icon`), `tile[selected]`, `tile description` (incl. `display: none`); px-only subset, later rules win. Built-ins (`Theme::dark/light/transparent_dark`) are embedded stylesheets — copy `assets/themes/dark.css` to start your own.
-- **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width
+- **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width. Measured against the full option list, so filtering never resizes the window or collapses grid columns; the target size is re-sent until the window manager applies it, so a resize lost during startup can't stick the modal wide
 
 ## Usage
 
