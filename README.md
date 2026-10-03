@@ -9,6 +9,7 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Modals** — `Modal::new("Title").run()` blocks until pick / cancel
 - **Options** — `ModalOption::new(id, label).description(...)`
 - **Sub-options** — `.sub_option(...)` nests options into drill-down submenus: Enter/click (or → in list layout) drills in, Esc/Backspace/‹ (or ← in list layout) goes back, only leaves are picked (`sel.path` is the index path); see `examples/sub_options.rs`
+- **Actions** — `.command(...)`/`.shell(...)`/`.on_select(...)` fire a program, a shell one-liner, or a Rust closure when the option is picked (once, after close, on the calling thread); `.on_error(...)` runs a fallback if the spawn fails; see `examples/actions.rs`
 - **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
 - **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image; keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
@@ -61,6 +62,7 @@ Keys: type to filter, ↑/↓ navigate, Enter pick (or drill into a submenu), Es
 cargo run --example basic
 cargo run --example case_sensitive
 cargo run --example sub_options               # drill-down submenus
+cargo run --example actions                   # per-option shell/Rust actions
 cargo run --example themed_icons
 cargo run --example css_themed                # styled from assets/theme.css
 cargo run --example image_picker            # pick one of several images

@@ -212,15 +212,64 @@ impl Modal {
         filter_options(&self.options, query, self.search.case_sensitive)
     }
 
+    /// Collect `(index-path, action, on_error)` for every option with an
+    /// action, so [`Modal::run`] can fire the pick's action after the modal
+    /// is gone (the modal itself is moved into the GUI closure).
+    fn collect_actions(&self) -> Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)> {
+        fn walk(
+            prefix: &mut Vec<usize>,
+            opts: &[ModalOption],
+            out: &mut Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)>,
+        ) {
+            for (i, o) in opts.iter().enumerate() {
+                if let Some(a) = &o.action {
+                    prefix.push(i);
+                    out.push((prefix.clone(), a.clone(), o.on_error.clone()));
+                    prefix.pop();
+                }
+                if !o.children.is_empty() {
+                    prefix.push(i);
+                    walk(prefix, &o.children, out);
+                    prefix.pop();
+                }
+            }
+        }
+        let mut out = Vec::new();
+        walk(&mut Vec::new(), &self.options, &mut out);
+        out
+    }
+
+    /// Fire the pick's action, or its `on_error` fallback when the spawn
+    /// fails. Split out for tests (`run()` needs a display).
+    pub(crate) fn dispatch_action(
+        actions: &[(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)],
+        sel: &ModalSelection,
+    ) {
+        if let Some((_, action, on_error)) = actions.iter().find(|(p, _, _)| *p == sel.path) {
+            if let Err(e) = action.execute(sel) {
+                if let Some(f) = on_error {
+                    f(sel, &e);
+                }
+            }
+        }
+    }
+
     /// Show the modal and block until the user picks or cancels.
     ///
     /// Returns `Ok(None)` on Esc / window close.
     /// Returns `Err` if the GUI backend fails to start (e.g. no display),
     /// or if the [`Modal::stylesheet`] fails to parse.
+    ///
+    /// If the picked option has an action ([`ModalOption::command`],
+    /// [`ModalOption::shell`], [`ModalOption::on_select`]), it fires here —
+    /// once, on the calling thread, after the window closes. A failing
+    /// spawn fires the option's [`ModalOption::on_error`] fallback instead.
     pub fn run(self) -> Result<Option<ModalSelection>, String> {
         if self.options.is_empty() {
             return Err("quick-modals: no options provided".to_string());
         }
+        // Actions are cloned out first: `self` moves into the GUI closure.
+        let actions = self.collect_actions();
         let mut modal = self;
         modal.theme = modal.resolved_theme()?;
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
@@ -271,7 +320,12 @@ impl Modal {
         if let Err(e) = res {
             return Err(format!("quick-modals backend error: {e}"));
         }
-        Ok(shared.lock().map(|g| g.clone()).unwrap_or(None))
+        let picked: Option<ModalSelection> =
+            shared.lock().map(|g| g.clone()).unwrap_or(None);
+        if let Some(ref sel) = picked {
+            Modal::dispatch_action(&actions, sel);
+        }
+        Ok(picked)
     }
 }
 
@@ -293,6 +347,85 @@ mod tests {
                 .fit_width_to_content(true)
                 .fit_width_to_content
         );
+    }
+
+    #[test]
+    fn collect_actions_walks_nested_paths() {
+        let m = Modal::new("x")
+            .option(ModalOption::new("a", "A").command("echo-a"))
+            .option(
+                ModalOption::new("p", "Parent").sub_options([
+                    ModalOption::new("b", "B"),
+                    ModalOption::new("c", "C").shell("echo-c"),
+                ]),
+            );
+        let actions = m.collect_actions();
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].0, vec![0]);
+        assert!(matches!(
+            actions[0].1,
+            crate::SelectAction::Command { .. }
+        ));
+        assert_eq!(actions[1].0, vec![1, 1]);
+        assert!(matches!(actions[1].1, crate::SelectAction::Shell(_)));
+    }
+
+    #[test]
+    fn dispatch_action_falls_back_on_spawn_failure() {
+        use std::sync::{Arc, Mutex};
+        let sel = ModalSelection {
+            id: "bad".to_string(),
+            label: "Bad".to_string(),
+            index: 0,
+            path: vec![0],
+            query: String::new(),
+        };
+        // No panic without a handler either.
+        let bare = Modal::new("y")
+            .option(ModalOption::new("bad", "Bad").command("definitely-not-a-real-binary"));
+        let bare_actions = bare.collect_actions();
+        Modal::dispatch_action(&bare_actions, &sel);
+
+        // With a handler: it fires exactly once, with the pick and the error.
+        let fired = Arc::new(Mutex::new(Vec::new()));
+        let fired2 = fired.clone();
+        let m2 = Modal::new("x").option(
+            ModalOption::new("bad", "Bad")
+                .command("definitely-not-a-real-binary")
+                .on_error(move |sel, err| {
+                    fired2
+                        .lock()
+                        .unwrap()
+                        .push((sel.id.clone(), err.to_string()));
+                }),
+        );
+        Modal::dispatch_action(&m2.collect_actions(), &sel);
+        let fired = fired.lock().unwrap();
+        assert_eq!(fired.len(), 1);
+        assert_eq!(fired[0].0, "bad");
+        assert!(!fired[0].1.is_empty());
+    }
+
+    #[test]
+    fn dispatch_action_skips_fallback_on_success() {
+        use std::sync::{Arc, Mutex};
+        let fired = Arc::new(Mutex::new(false));
+        let fired2 = fired.clone();
+        // Callbacks cannot spawn-fail: fallback must stay quiet.
+        let m = Modal::new("x").option(
+            ModalOption::new("ok", "Ok")
+                .on_select(|_| {})
+                .on_error(move |_, _| *fired2.lock().unwrap() = true),
+        );
+        let sel = ModalSelection {
+            id: "ok".to_string(),
+            label: "Ok".to_string(),
+            index: 0,
+            path: vec![0],
+            query: String::new(),
+        };
+        Modal::dispatch_action(&m.collect_actions(), &sel);
+        assert!(!*fired.lock().unwrap());
     }
 
     #[test]

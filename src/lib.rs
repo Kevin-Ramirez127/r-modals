@@ -41,6 +41,6 @@ mod search;
 mod theme;
 
 pub use modal::{Modal, ModalSelection};
-pub use option::{IconSource, ModalOption};
+pub use option::{ErrorAction, IconSource, ModalOption, SelectAction};
 pub use search::{filter_options, SearchConfig};
 pub use theme::{Layout, Position, Theme};

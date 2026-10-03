@@ -86,12 +86,78 @@ impl From<&[u8]> for IconSource {
     }
 }
 
+/// Fallback fired when an option's [`SelectAction`] fails to spawn.
+/// Runs on the calling thread, right where the action would have run.
+pub type ErrorAction =
+    std::sync::Arc<dyn Fn(&crate::ModalSelection, &std::io::Error) + Send + Sync>;
+
+/// What happens when an option is picked (see [`ModalOption::command`],
+/// [`ModalOption::shell`], [`ModalOption::on_select`]).
+///
+/// Executed once by [`Modal::run`] after the window closes, on the calling
+/// thread. Process launches are best-effort and spawn detached: a failing
+/// spawn never erases the pick.
+#[derive(Clone)]
+pub enum SelectAction {
+    /// Spawn `program` with `args` detached (`echo`, `firefox`, …).
+    Command { program: String, args: Vec<String> },
+    /// Run a shell one-liner (`sh -c` on unix, `cmd /C` on Windows).
+    Shell(String),
+    /// Call a Rust closure with the final selection.
+    Callback(std::sync::Arc<dyn Fn(&crate::ModalSelection) + Send + Sync>),
+}
+
+impl std::fmt::Debug for SelectAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SelectAction::Command { program, args } => f
+                .debug_struct("Command")
+                .field("program", program)
+                .field("args", args)
+                .finish(),
+            SelectAction::Shell(cmd) => f.debug_tuple("Shell").field(cmd).finish(),
+            SelectAction::Callback(_) => f.debug_tuple("Callback").field(&"..").finish(),
+        }
+    }
+}
+
+impl SelectAction {
+    /// Fire the action for a pick (called by [`Modal::run`](crate::Modal::run)
+    /// on the calling thread, after the window closes). `Ok` for callbacks;
+    /// the spawn result for processes.
+    pub(crate) fn execute(&self, sel: &crate::ModalSelection) -> std::io::Result<()> {
+        match self {
+            SelectAction::Command { program, args } => {
+                std::process::Command::new(program)
+                    .args(args)
+                    .spawn()
+                    .map(|_| ())
+            }
+            SelectAction::Shell(cmd) => {
+                let (prog, flag) = if cfg!(windows) {
+                    ("cmd", "/C")
+                } else {
+                    ("sh", "-c")
+                };
+                std::process::Command::new(prog)
+                    .args([flag, cmd])
+                    .spawn()
+                    .map(|_| ())
+            }
+            SelectAction::Callback(f) => {
+                f(sel);
+                Ok(())
+            }
+        }
+    }
+}
+
 /// One selectable row in the modal.
 ///
 /// An option with [`ModalOption::sub_option`] children acts as a submenu:
 /// activating it drills one level deeper instead of picking it. Only
 /// childless (leaf) options can be picked.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModalOption {
     /// Stable id returned on selection.
     pub id: String,
@@ -109,6 +175,30 @@ pub struct ModalOption {
     /// Nested options shown one level deeper on drill-down.
     /// Empty (default) means this option is a pickable leaf.
     pub children: Vec<ModalOption>,
+    /// Action fired when this option is picked (see [`SelectAction`]).
+    /// `None` (default) means pick-only. Process launches are best-effort:
+    /// a failing spawn fires [`ModalOption::on_error`] instead of erasing
+    /// the pick.
+    pub action: Option<SelectAction>,
+    /// Fallback fired when this option's [`SelectAction`] fails to spawn.
+    /// `None` (default) means failures stay silent. Never fires without an
+    /// action, and never fires for Rust callbacks (they cannot spawn-fail).
+    pub on_error: Option<ErrorAction>,
+}
+
+impl std::fmt::Debug for ModalOption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModalOption")
+            .field("id", &self.id)
+            .field("label", &self.label)
+            .field("description", &self.description)
+            .field("icon", &self.icon)
+            .field("unsearchable", &self.unsearchable)
+            .field("children", &self.children)
+            .field("action", &self.action)
+            .field("on_error", &self.on_error.as_ref().map(|_| ".."))
+            .finish()
+    }
 }
 
 impl ModalOption {
@@ -121,6 +211,8 @@ impl ModalOption {
             icon: IconSource::None,
             unsearchable: false,
             children: Vec::new(),
+            action: None,
+            on_error: None,
         }
     }
 
@@ -170,6 +262,85 @@ impl ModalOption {
     /// in rather than picking).
     pub fn has_children(&self) -> bool {
         !self.children.is_empty()
+    }
+
+    /// Run `program` when this option is picked, spawned detached.
+    /// Combine with [`ModalOption::arg`]/[`ModalOption::args`] for flags:
+    ///
+    /// ```no_run
+    /// use quick_modals::ModalOption;
+    /// let opt = ModalOption::new("ff", "Firefox").command("firefox").arg("--new-window");
+    /// ```
+    pub fn command(mut self, program: impl Into<String>) -> Self {
+        self.action = Some(SelectAction::Command {
+            program: program.into(),
+            args: Vec::new(),
+        });
+        self
+    }
+
+    /// Append one argument to this option's [`ModalOption::command`].
+    /// No-op unless a command was set (then kept in order).
+    pub fn arg(mut self, arg: impl Into<String>) -> Self {
+        if let Some(SelectAction::Command { args, .. }) = &mut self.action {
+            args.push(arg.into());
+        }
+        self
+    }
+
+    /// Append many arguments to this option's [`ModalOption::command`].
+    /// No-op unless a command was set.
+    pub fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        if let Some(SelectAction::Command { args: dst, .. }) = &mut self.action {
+            dst.extend(args.into_iter().map(Into::into));
+        }
+        self
+    }
+
+    /// Run a shell one-liner when this option is picked
+    /// (`sh -c` on unix, `cmd /C` on Windows), spawned detached:
+    ///
+    /// ```no_run
+    /// use quick_modals::ModalOption;
+    /// let opt = ModalOption::new("up", "Update").shell("notify-send done && apt update");
+    /// ```
+    pub fn shell(mut self, cmdline: impl Into<String>) -> Self {
+        self.action = Some(SelectAction::Shell(cmdline.into()));
+        self
+    }
+
+    /// Call a Rust closure with the final [`crate::ModalSelection`] when
+    /// this option is picked (runs on the calling thread after `run()`):
+    ///
+    /// ```no_run
+    /// use quick_modals::ModalOption;
+    /// let opt = ModalOption::new("hi", "Hi").on_select(|sel| println!("picked {}", sel.id));
+    /// ```
+    pub fn on_select(mut self, f: impl Fn(&crate::ModalSelection) + Send + Sync + 'static) -> Self {
+        self.action = Some(SelectAction::Callback(std::sync::Arc::new(f)));
+        self
+    }
+
+    /// Fallback fired when this option's action fails to spawn (bad binary,
+    /// missing shell, …). Only meaningful alongside an action, and only for
+    /// process actions — Rust callbacks cannot fail this way:
+    ///
+    /// ```no_run
+    /// use quick_modals::ModalOption;
+    /// let opt = ModalOption::new("term", "Terminal")
+    ///     .command("ghost-terminal")
+    ///     .on_error(|sel, err| println!("could not launch {}: {err}", sel.id));
+    /// ```
+    pub fn on_error(
+        mut self,
+        f: impl Fn(&crate::ModalSelection, &std::io::Error) + Send + Sync + 'static,
+    ) -> Self {
+        self.on_error = Some(std::sync::Arc::new(f));
+        self
     }
 
     /// Text haystack used for filtering (label + id + description).
@@ -289,5 +460,69 @@ mod tests {
             .sub_option(ModalOption::new("c", "Child"));
         assert!(!parent.matches_query("Parent", "parent", false));
         assert!(parent.matches_query("Child", "child", false));
+    }
+
+    #[test]
+    fn action_builders() {
+        assert!(ModalOption::new("x", "X").action.is_none());
+        let c = ModalOption::new("ff", "Firefox")
+            .command("firefox")
+            .arg("--new-window")
+            .args(["--safe-mode"]);
+        match &c.action {
+            Some(SelectAction::Command { program, args }) => {
+                assert_eq!(program, "firefox");
+                assert_eq!(args, &["--new-window", "--safe-mode"]);
+            }
+            other => panic!("expected command, got {other:?}"),
+        }
+        // args without a command: no-op, stays None.
+        assert!(ModalOption::new("x", "X").arg("--foo").action.is_none());
+        let s = ModalOption::new("up", "Update").shell("apt update");
+        assert!(matches!(s.action, Some(SelectAction::Shell(_))));
+        let cb = ModalOption::new("hi", "Hi").on_select(|_| {});
+        assert!(matches!(cb.action, Some(SelectAction::Callback(_))));
+        // Debug works with every variant (callbacks aren't introspectable).
+        assert!(format!("{cb:?}").contains("Callback"));
+    }
+
+    #[test]
+    fn callback_executes_with_selection() {
+        use std::sync::{Arc, Mutex};
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let seen2 = seen.clone();
+        let opt = ModalOption::new("ff", "Firefox")
+            .command("firefox")
+            .on_select(move |sel| seen2.lock().unwrap().push(sel.id.clone()));
+        // `on_select` replaces the command.
+        assert!(matches!(opt.action, Some(SelectAction::Callback(_))));
+        let sel = crate::ModalSelection {
+            id: "ff".to_string(),
+            label: "Firefox".to_string(),
+            index: 0,
+            path: vec![0],
+            query: String::new(),
+        };
+        opt.action.as_ref().unwrap().execute(&sel).unwrap();
+        assert_eq!(*seen.lock().unwrap(), vec!["ff".to_string()]);
+    }
+
+    #[test]
+    fn on_error_defaults_none_and_debugs() {
+        assert!(ModalOption::new("x", "X").on_error.is_none());
+        let opt = ModalOption::new("term", "Terminal")
+            .command("ghost-terminal")
+            .on_error(|_, _| {});
+        assert!(opt.on_error.is_some());
+        assert!(format!("{opt:?}").contains("on_error"));
+        // Failing spawn surfaces as Err from execute.
+        let sel = crate::ModalSelection {
+            id: "term".to_string(),
+            label: "Terminal".to_string(),
+            index: 0,
+            path: vec![0],
+            query: String::new(),
+        };
+        assert!(opt.action.as_ref().unwrap().execute(&sel).is_err());
     }
 }
