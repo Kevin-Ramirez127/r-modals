@@ -28,6 +28,8 @@ impl Default for SearchConfig {
 ///
 /// Substring match over label + id + description.
 /// Returns indices into `options`, preserving order.
+/// A parent option also matches when any of its descendants match (so it
+/// can act as a gateway to drill into).
 ///
 /// The query is lowered once here; each option is checked field-by-field
 /// with early exit (label hit skips id/description), so matching options
@@ -99,5 +101,18 @@ mod tests {
         assert!(filter_options(&o, "firefox", false).is_empty());
         // …but still listed with an empty query
         assert_eq!(filter_options(&o, "", false), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn parent_matches_descendant_query() {
+        let o = vec![
+            ModalOption::new("disp", "Display")
+                .sub_option(ModalOption::new("res", "Resolution")),
+            ModalOption::new("snd", "Sound"),
+        ];
+        assert_eq!(filter_options(&o, "resolution", false), vec![0]);
+        assert_eq!(filter_options(&o, "Resolution", true), vec![0]);
+        assert_eq!(filter_options(&o, "sound", false), vec![1]);
+        assert!(filter_options(&o, "wifi", false).is_empty());
     }
 }

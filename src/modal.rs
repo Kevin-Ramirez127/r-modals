@@ -8,8 +8,12 @@ pub struct ModalSelection {
     pub id: String,
     /// The `label` of the chosen option.
     pub label: String,
-    /// Index into the original option list passed to the modal.
+    /// Index of the chosen option within its own level (i.e. among its
+    /// siblings). Always equals `path.last()`.
     pub index: usize,
+    /// Index path from the top-level option list to the chosen leaf, one
+    /// entry per level. Flat modals always yield a single entry.
+    pub path: Vec<usize>,
     /// Final search query text.
     pub query: String,
 }
