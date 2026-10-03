@@ -33,3 +33,13 @@ tile[selected] {
 tile description {
   color: #6e6e7d;
 }
+
+search {
+  background: #ffffff;
+  color: #141419;
+  border: 1px solid #d2d2dc;
+}
+
+search hint {
+  color: #6e6e7d;
+}

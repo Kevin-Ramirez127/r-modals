@@ -10,6 +10,10 @@
 //! - `tile icon` — the icon inside list rows: `width`/`height` (must match)
 //! - `tile[selected]` — the selected row/tile: `background`/`background-color`
 //! - `tile description` — secondary text: `color`, `display: none` (hides it)
+//! - `search` — the search field: `background`/`background-color`, `color`
+//!   (typed text), `font-size`, `border-radius`,
+//!   `border`/`border-width`/`border-color`
+//! - `search hint` — the placeholder text: `color`
 //!
 //! Only `px` lengths are supported (`0` counts as `0px`). Anything else —
 //! `em`, `%`, `auto` where a length is required — is an error, except
@@ -43,6 +47,8 @@ enum Target {
     TileIcon,
     TileSelected,
     TileDescription,
+    Search,
+    SearchHint,
 }
 
 fn target_of(selector: &str) -> Result<Target, String> {
@@ -62,8 +68,14 @@ fn target_of(selector: &str) -> Result<Target, String> {
     if s.eq_ignore_ascii_case("tile description") {
         return Ok(Target::TileDescription);
     }
+    if s.eq_ignore_ascii_case("search") {
+        return Ok(Target::Search);
+    }
+    if s.eq_ignore_ascii_case("search hint") {
+        return Ok(Target::SearchHint);
+    }
     Err(format!(
-        "unsupported selector {s:?}; supported: modal, tile, `tile icon`, tile[selected], `tile description`"
+        "unsupported selector {s:?}; supported: modal, tile, `tile icon`, tile[selected], `tile description`, search, `search hint`"
     ))
 }
 
@@ -301,6 +313,53 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
             },
             _ => return Err(unsupported(target, prop)),
         },
+        Target::Search => match prop {
+            Property::BackgroundColor(c) => {
+                theme.search_background = color(c, "search background")?
+            }
+            Property::Background(bgs) => {
+                let [bg] = bgs.as_slice() else {
+                    return Err("search background: multiple backgrounds are not supported".into());
+                };
+                if background_image_present(bg, "search background")? {
+                    return Err("search background: background images are not supported".into());
+                }
+                theme.search_background = color(&bg.color, "search background")?;
+            }
+            Property::Color(c) => theme.search_text = color(c, "search color")?,
+            Property::FontSize(s) => {
+                theme.search_font_size = Some(font_px(s, "search font-size")?);
+            }
+            Property::BorderRadius(r, _) => {
+                theme.search_radius = Some(uniform_radius(r, "search border-radius")?);
+            }
+            Property::Border(b) => {
+                if matches!(b.style, LineStyle::None) {
+                    theme.search_border_width = 0.0;
+                } else {
+                    theme.search_border_width = border_side_width(&b.width, "search border")?;
+                    theme.search_border = color(&b.color, "search border")?;
+                }
+            }
+            Property::BorderWidth(w) => {
+                theme.search_border_width = uniform(
+                    border_side_width(&w.top, "search border-width")?,
+                    border_side_width(&w.right, "search border-width")?,
+                    border_side_width(&w.bottom, "search border-width")?,
+                    border_side_width(&w.left, "search border-width")?,
+                    "search border-width",
+                )?;
+            }
+            Property::BorderColor(c) => {
+                theme.search_border =
+                    uniform_color(&c.top, &c.right, &c.bottom, &c.left, "search border-color")?;
+            }
+            _ => return Err(unsupported(target, prop)),
+        },
+        Target::SearchHint => match prop {
+            Property::Color(c) => theme.search_hint = color(c, "search hint color")?,
+            _ => return Err(unsupported(target, prop)),
+        },
     }
     Ok(())
 }
@@ -312,6 +371,8 @@ fn unsupported(target: Target, prop: &Property) -> String {
         Target::TileIcon => "`tile icon`",
         Target::TileSelected => "tile[selected]",
         Target::TileDescription => "`tile description`",
+        Target::Search => "search",
+        Target::SearchHint => "`search hint`",
     };
     match prop.to_css_string(false, Default::default()) {
         Ok(text) => format!("unsupported property for {name}: {text}"),
@@ -510,6 +571,46 @@ mod tests {
     }
 
     #[test]
+    fn search_field_mapping() {
+        let t = themed(
+            r#"
+            search {
+                background: #222228; color: #f0f0f5; font-size: 18px;
+                border-radius: 8px; border: 2px solid #111111;
+            }
+            search hint { color: #888895; }
+            "#,
+        );
+        assert_eq!(
+            t.search_background,
+            egui::Color32::from_rgb(34, 34, 40)
+        );
+        assert_eq!(t.search_text, egui::Color32::from_rgb(240, 240, 245));
+        assert_eq!(t.search_font_size, Some(18.0));
+        assert_eq!(t.effective_search_font_size(), 18.0);
+        assert_eq!(t.search_radius, Some(8.0));
+        assert_eq!(t.effective_search_radius(), 8.0);
+        assert_eq!(t.search_border_width, 2.0);
+        assert_eq!(t.search_border, egui::Color32::from_rgb(17, 17, 17));
+        assert_eq!(t.search_hint, egui::Color32::from_rgb(136, 136, 149));
+    }
+
+    #[test]
+    fn search_defaults_follow_modal() {
+        let t = themed("modal { font-size: 20px; border-radius: 10px; }");
+        assert_eq!(t.search_font_size, None);
+        assert_eq!(t.effective_search_font_size(), 20.0);
+        assert_eq!(t.search_radius, None);
+        assert_eq!(t.effective_search_radius(), 6.0);
+    }
+
+    #[test]
+    fn search_border_none_means_no_border() {
+        let t = themed("search { border: none; }");
+        assert_eq!(t.search_border_width, 0.0);
+    }
+
+    #[test]
     fn display_none_hides_descriptions() {
         let t = themed("tile description { display: none; color: red; }");
         assert!(!t.show_descriptions);
@@ -585,6 +686,9 @@ mod tests {
             "modal { display: flex; }",              // unknown property
             "tile { color: red; }",                  // wrong target
             "tile description { background: red; }", // wrong target
+            "search { width: 10px; }",               // search has no box size
+            "search { gap: 4px; }",                  // wrong target
+            "search hint { background: red; }",      // wrong target
             "modal { width: 10em; }",                // non-px unit
             "modal { width: 50%; }",                 // percentage
             "modal { font-size: medium; }",          // keyword size

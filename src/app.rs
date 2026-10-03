@@ -1548,15 +1548,38 @@ impl eframe::App for ModalApp {
                 });
                 ui.add_space(4.0);
             }
-            // Search field.
+            // Search field, wrapped in a themed frame (background, border,
+            // radius). The TextEdit itself is frameless so the frame is the
+            // only box drawn.
             if self.modal.search.enabled {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut self.query)
-                        .id(self.search_id)
-                        .hint_text(&self.modal.search.placeholder)
-                        .desired_width(f32::INFINITY)
-                        .margin(egui::Vec2::new(10.0, 8.0)),
-                );
+                let search_font =
+                    egui::FontId::proportional(t.effective_search_font_size());
+                let resp = egui::Frame::new()
+                    .fill(t.search_background)
+                    .corner_radius(t.effective_search_radius())
+                    .stroke(egui::Stroke::new(
+                        t.search_border_width,
+                        t.search_border,
+                    ))
+                    .inner_margin(egui::Margin::symmetric(10, 7))
+                    .show(ui, |ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.query)
+                                .id(self.search_id)
+                                .hint_text(
+                                    egui::RichText::new(&self.modal.search.placeholder)
+                                        .color(t.search_hint),
+                                )
+                                .hint_text_font(search_font.clone())
+                                .font(search_font)
+                                .text_color(t.search_text)
+                                .frame(false)
+                                .background_color(egui::Color32::TRANSPARENT)
+                                .desired_width(f32::INFINITY)
+                                .margin(egui::Vec2::ZERO),
+                        )
+                    })
+                    .inner;
                 if (self.modal.search.autofocus && !self.focused_once)
                     || self.query.is_empty() && !self.focused_once
                 {

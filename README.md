@@ -12,7 +12,7 @@ One call pops a centered, borderless, searchable option picker (eframe/egui back
 - **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
 - **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
 - **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image; keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
-- **Styling is CSS-only** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); no builder functions. Selectors: `modal`, `tile` (+`width`/`height`, `tile icon`), `tile[selected]`, `tile description` (incl. `display: none`); px-only subset, later rules win. Built-ins (`Theme::dark/light/transparent_dark`) are embedded stylesheets — copy `assets/themes/dark.css` to start your own.
+- **Styling is CSS-only** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); no builder functions. Selectors: `modal`, `tile` (+`width`/`height`, `tile icon`), `tile[selected]`, `tile description` (incl. `display: none`), `search` (+`search hint` for the placeholder); px-only subset, later rules win. Built-ins (`Theme::dark/light/transparent_dark`) are embedded stylesheets — copy `assets/themes/dark.css` to start your own.
 - **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width. Measured against the full option list, so filtering never resizes the window or collapses grid columns; the target size is re-sent until the window manager applies it, so a resize lost during startup can't stick the modal wide
 
 ## Usage
@@ -30,6 +30,28 @@ let choice = Modal::new("Launcher")
 
 `run()` returns `Ok(Some(ModalSelection { id, label, index, path, query }))` or `Ok(None)` on Esc/close.
 `path` is the index path from the top level to the pick (`index` is its last entry).
+
+Style the search bar with the `search` selector (typed text, background, border, radius, size) and `search hint` (placeholder color):
+
+```css
+search {
+  background: #222228;
+  color: #f0f0f5;
+  font-size: 18px;
+  border-radius: 8px;
+  border: 1px solid #3c3c48;
+}
+search hint { color: #888895; }
+```
+
+```rust
+use quick_modals::Modal;
+// Base theme file + inline override snippet (override wins):
+let sel = Modal::new("Pick one")
+    .stylesheet(include_str!("theme.css"))
+    .stylesheet_override("search { background: #222228; }")
+    .run();
+```
 
 Keys: type to filter, ↑/↓ navigate, Enter pick (or drill into a submenu), Esc cancel (or back out of a submenu), Backspace backs out when the search field is empty. In list layout ← backs out (↑ previous at the root) and → drills in (↑ next on leaves). Mouse hover + click works too, plus the ‹/Top breadcrumb.
 

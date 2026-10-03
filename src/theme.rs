@@ -64,6 +64,21 @@ pub struct Theme {
     pub border_width: f32,
     /// Search field font size.
     pub font_size: f32,
+    /// Search field background fill.
+    pub search_background: Color32,
+    /// Search field typed text color.
+    pub search_text: Color32,
+    /// Search field placeholder (hint) text color.
+    pub search_hint: Color32,
+    /// Search field border color.
+    pub search_border: Color32,
+    /// Search field border width (0 = none).
+    pub search_border_width: f32,
+    /// Search field corner radius. `None` (default) derives 60% of
+    /// `corner_radius`, so it follows the modal shape automatically.
+    pub search_radius: Option<f32>,
+    /// Search field font size. `None` (default) follows `font_size`.
+    pub search_font_size: Option<f32>,
     /// Show item descriptions.
     pub show_descriptions: bool,
 }
@@ -97,6 +112,13 @@ impl Theme {
             border: Color32::from_rgb(60, 60, 72),
             border_width: 1.0,
             font_size: 15.0,
+            search_background: Color32::from_rgb(34, 34, 40),
+            search_text: Color32::from_rgb(235, 235, 240),
+            search_hint: Color32::from_rgb(150, 150, 165),
+            search_border: Color32::from_rgb(60, 60, 72),
+            search_border_width: 1.0,
+            search_radius: None,
+            search_font_size: None,
             show_descriptions: true,
         }
     }
@@ -124,6 +146,18 @@ impl Theme {
     /// Effective option corner radius: explicit override or 60% of the modal radius.
     pub(crate) fn effective_tile_radius(&self) -> f32 {
         self.tile_radius.unwrap_or(self.corner_radius * 0.6)
+    }
+
+    /// Effective search field corner radius: explicit override or 60% of
+    /// the modal radius.
+    pub(crate) fn effective_search_radius(&self) -> f32 {
+        self.search_radius.unwrap_or(self.corner_radius * 0.6)
+    }
+
+    /// Effective search field font size: explicit override or the modal
+    /// font size.
+    pub(crate) fn effective_search_font_size(&self) -> f32 {
+        self.search_font_size.unwrap_or(self.font_size)
     }
 
     /// Build a theme from a CSS stylesheet (see `css` module docs for the
@@ -201,6 +235,13 @@ mod tests {
         assert_eq!(dark.surface, Color32::from_rgb(34, 34, 40));
         assert_eq!(dark.text, Color32::from_rgb(235, 235, 240));
         assert_eq!(dark.tile_radius, None);
+        assert_eq!(dark.search_background, Color32::from_rgb(34, 34, 40));
+        assert_eq!(dark.search_text, Color32::from_rgb(235, 235, 240));
+        assert_eq!(dark.search_hint, Color32::from_rgb(150, 150, 165));
+        assert_eq!(dark.search_border, Color32::from_rgb(60, 60, 72));
+        assert_eq!(dark.search_border_width, 1.0);
+        assert_eq!(dark.search_radius, None);
+        assert_eq!(dark.search_font_size, None);
 
         let light = Theme::light();
         assert_eq!(light.background, Color32::from_rgb(245, 245, 248));
@@ -218,6 +259,13 @@ mod tests {
         assert_eq!(light.margin, 8.0);
         assert_eq!(light.item_spacing, 4.0);
         assert_eq!(light.font_size, 15.0);
+        assert_eq!(light.search_background, Color32::WHITE);
+        assert_eq!(light.search_text, Color32::from_rgb(20, 20, 25));
+        assert_eq!(light.search_hint, Color32::from_rgb(110, 110, 125));
+        assert_eq!(light.search_border, Color32::from_rgb(210, 210, 220));
+        assert_eq!(light.search_border_width, 1.0);
+        assert_eq!(light.search_radius, None);
+        assert_eq!(light.search_font_size, None);
         assert_eq!(light.icon_size, 28.0);
         assert_eq!(light.tile_size, 112.0);
         assert_eq!(light.tile_radius, None);
@@ -258,6 +306,13 @@ mod tests {
         assert_eq!(t.margin, Theme::dark().margin);
         assert_eq!(t.item_spacing, Theme::dark().item_spacing);
         assert_eq!(t.font_size, Theme::dark().font_size);
+        assert_eq!(t.search_background, Theme::dark().search_background);
+        assert_eq!(t.search_text, Theme::dark().search_text);
+        assert_eq!(t.search_hint, Theme::dark().search_hint);
+        assert_eq!(t.search_border, Theme::dark().search_border);
+        assert_eq!(t.search_border_width, Theme::dark().search_border_width);
+        assert_eq!(t.search_radius, Theme::dark().search_radius);
+        assert_eq!(t.search_font_size, Theme::dark().search_font_size);
         assert_eq!(t.icon_size, Theme::dark().icon_size);
         assert_eq!(t.tile_size, Theme::dark().tile_size);
         assert_eq!(t.tile_radius, Theme::dark().tile_radius);

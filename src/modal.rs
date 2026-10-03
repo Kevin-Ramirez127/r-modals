@@ -38,6 +38,9 @@ pub struct Modal {
     pub(crate) center_on_navigate: bool,
     pub(crate) fit_width_to_content: bool,
     pub(crate) stylesheet: Option<String>,
+    /// Second stylesheet, applied after [`Modal::stylesheet`].
+    /// Wins wherever both specify something.
+    pub(crate) stylesheet_override: Option<String>,
     pub(crate) position: Position,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
@@ -55,6 +58,7 @@ impl Modal {
             center_on_navigate: true,
             fit_width_to_content: false,
             stylesheet: None,
+            stylesheet_override: None,
             position: Position::Center,
             initial_query: String::new(),
             app_id: "quick-modals".to_string(),
@@ -149,10 +153,35 @@ impl Modal {
         self
     }
 
+    /// Inject a CSS snippet that overrides both the [`Theme`] and the
+    /// [`Modal::stylesheet`] file. Layering order (later wins):
+    /// theme → `stylesheet` → `stylesheet_override`.
+    ///
+    /// Useful when the base theme lives in a file and call-site tweaks go
+    /// inline:
+    ///
+    /// ```no_run
+    /// use quick_modals::Modal;
+    /// let sel = Modal::new("Pick one")
+    ///     .stylesheet("modal { background: #18181c; }")
+    ///     .stylesheet_override("search { background: #222228; }")
+    ///     .run();
+    /// ```
+    ///
+    /// A bad override stylesheet makes [`Modal::run`] return `Err`, same as
+    /// [`Modal::stylesheet`].
+    pub fn stylesheet_override(mut self, css: impl Into<String>) -> Self {
+        self.stylesheet_override = Some(css.into());
+        self
+    }
+
     /// Theme with the stylesheet (if any) applied. Used by [`Modal::run`].
     pub(crate) fn resolved_theme(&self) -> Result<Theme, String> {
         let mut theme = self.theme.clone();
         if let Some(css) = &self.stylesheet {
+            theme.apply_css(css)?;
+        }
+        if let Some(css) = &self.stylesheet_override {
             theme.apply_css(css)?;
         }
         Ok(theme)
@@ -264,6 +293,30 @@ mod tests {
                 .fit_width_to_content(true)
                 .fit_width_to_content
         );
+    }
+
+    #[test]
+    fn stylesheet_override_wins_over_stylesheet_and_theme() {
+        let m = Modal::new("x")
+            .theme(Theme::from_css("modal { width: 100px; color: red; }").unwrap())
+            .stylesheet("modal { width: 200px; color: blue; }")
+            .stylesheet_override("modal { width: 300px; }");
+        let t = m.resolved_theme().unwrap();
+        // Override wins where specified…
+        assert_eq!(t.width, 300.0);
+        // …stylesheet wins where the override is silent…
+        assert_eq!(t.text, egui::Color32::from_rgb(0, 0, 255));
+        // …and a bad override errors like a bad stylesheet.
+        assert!(Modal::new("x")
+            .stylesheet_override("modal { width: 10em; }")
+            .resolved_theme()
+            .is_err());
+        // No override: previous behavior unchanged.
+        let t = Modal::new("x")
+            .stylesheet("modal { width: 200px; }")
+            .resolved_theme()
+            .unwrap();
+        assert_eq!(t.width, 200.0);
     }
 
     #[test]
