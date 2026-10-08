@@ -1,20 +1,31 @@
 # r-modals
 
-Instant modals made with Rust.
-
-One call pops a centered, borderless, searchable option picker (eframe/egui backend, works on X11 + Wayland).
+Instant modals for Rust — one call pops a centered, borderless, searchable option picker (`eframe`/`egui`, X11 + Wayland).
 
 ## Features
 
-- **Modals** — `Modal::new("Title").run()` blocks until pick / cancel
-- **Options** — `ModalOption::new(id, label).description(...)`
-- **Sub-options** — `.sub_option(...)` nests options into drill-down submenus: Enter/click (or → in list layout) drills in, Esc/Backspace/‹ (or ← in list layout) goes back, only leaves are picked (`sel.path` is the index path); see `examples/sub_options.rs`
-- **Actions** — `.command(...)`/`.shell(...)`/`.on_select(...)` fire a program, a shell one-liner, or a Rust closure when the option is picked (once, after close, on the calling thread); `.on_error(...)` runs a fallback if the spawn fails; see `examples/actions.rs`
-- **Search** — substring filter over label + id + description, `case_sensitive(true/false)`, placeholder, pre-filled query
-- **Images** — per-option icon from file path, bytes (`include_bytes!`), or raw RGBA; failures degrade gracefully
-- **Layouts** — `Layout::List` rows (thumbnail + text) or `Layout::Grid` squares where the tile *is* the image; keyboard navigation centers the selected row/tile, disable with `.center_on_navigate(false)`
-- **Styling is CSS-only** — `Theme::from_css(include_str!("theme.css"))` or `.stylesheet(css)` parses real CSS (`lightningcss`); no builder functions. Selectors: `modal`, `tile` (+`width`/`height`, `tile icon`), `tile[selected]`, `tile description` (incl. `display: none`), `search` (+`search hint` for the placeholder); px-only subset, later rules win. Built-ins (`Theme::dark/light/transparent_dark`) are embedded stylesheets — copy `assets/themes/dark.css` to start your own.
-- **Fit to content** — `.fit_width_to_content(true)` shrinks the window width to the measured content (clamped to 320px…theme width) instead of using the full theme width. Measured against the full option list, so filtering never resizes the window or collapses grid columns; the target size is re-sent until the window manager applies it, so a resize lost during startup can't stick the modal wide
+- **Blocking picker** — `Modal::new("Title").run()` returns the pick or `None` on cancel
+- **Options** — label, description, and icons (file path, bytes, or raw RGBA)
+- **Submenus** — nest options with `.sub_option(...)` for drill-down navigation
+- **Actions** — run a command, shell one-liner, or Rust closure on select
+- **Search** — filters over label, id, and description, with case-sensitivity option
+- **Layouts** — `List` rows or `Grid` image tiles
+- **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`
+
+## Install
+
+build from source:
+
+```sh
+cargo install --git https://github.com/Kevin-Ramirez127/r-modals quick-modals
+```
+
+To use it as a library, add it to your `Cargo.toml`:
+
+```toml
+[dependencies]
+quick-modals = { git = "https://github.com/Kevin-Ramirez127/r-modals" }
+```
 
 ## Usage
 
@@ -24,63 +35,48 @@ use quick_modals::{Modal, ModalOption};
 let choice = Modal::new("Launcher")
     .option(ModalOption::new("ff", "Firefox").description("Web browser"))
     .option(ModalOption::new("term", "Terminal").icon("icons/term.png"))
-    .stylesheet("modal { width: 560px; border-radius: 12px; }")
     .run()
     .unwrap();
-```
 
-`run()` returns `Ok(Some(ModalSelection { id, label, index, path, query }))` or `Ok(None)` on Esc/close.
-`path` is the index path from the top level to the pick (`index` is its last entry).
-
-Style the search bar with the `search` selector (typed text, background, border, radius, size) and `search hint` (placeholder color):
-
-```css
-search {
-  background: #222228;
-  color: #f0f0f5;
-  font-size: 18px;
-  border-radius: 8px;
-  border: 1px solid #3c3c48;
+if let Some(sel) = choice {
+    println!("picked {} ({})", sel.label, sel.id);
 }
-search hint { color: #888895; }
 ```
+
+Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + click works too.
+
+## Theming
+
+Styling is CSS-only:
 
 ```rust
-use quick_modals::Modal;
-// Base theme file + inline override snippet (override wins):
 let sel = Modal::new("Pick one")
     .stylesheet(include_str!("theme.css"))
-    .stylesheet_override("search { background: #222228; }")
     .run();
 ```
 
-Keys: type to filter, ↑/↓ navigate, Enter pick (or drill into a submenu), Esc cancel (or back out of a submenu), Backspace backs out when the search field is empty. In list layout ← backs out (↑ previous at the root) and → drills in (↑ next on leaves). Mouse hover + click works too, plus the ‹/Top breadcrumb.
+```css
+modal { width: 560px; border-radius: 12px; }
+search { background: #222228; color: #f0f0f5; }
+```
+
+See `assets/theme.css` and `assets/themes/` for starting points.
 
 ## Examples
 
 ```sh
 cargo run --example basic
-cargo run --example case_sensitive
-cargo run --example sub_options               # drill-down submenus
-cargo run --example actions                   # per-option shell/Rust actions
+cargo run --example sub_options
+cargo run --example actions
 cargo run --example themed_icons
-cargo run --example css_themed                # styled from assets/theme.css
-cargo run --example image_picker            # pick one of several images
-cargo run --example image_picker -- ~/Pictures/wallpapers
-```
-
-Headless filtering (no window) is also available and unit-tested:
-
-```rust
-let m = Modal::new("x").option(ModalOption::new("a", "Alpha"));
-assert_eq!(m.filtered_indices("alp"), vec![0]);
+cargo run --example css_themed
+cargo run --bin quick-modals -- ~/Pictures/wallpapers
 ```
 
 ## Notes
 
-- eframe centers the window; `Position::Custom { x, y }` sets an explicit position.
-  True layer-shell exclusivity is compositor-specific and intentionally out of scope.
-- Icons decode via the `image` crate at render time and are cached as egui textures.
-- Tiling compositors (sway/Hyprland/…) tile the modal and ignore its size.
-  Float it via the `quick-modals` app_id (override with `Modal::app_id`), e.g. sway:
-  `for_window [app_id="quick-modals"] floating enable`.
+- On tiling compositors (sway/Hyprland), float the window via the `quick-modals` app id, e.g. `for_window [app_id="quick-modals"] floating enable`.
+
+## License
+
+MIT OR Apache-2.0

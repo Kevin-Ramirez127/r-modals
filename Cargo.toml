@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 description = "Instant modals for Rust — searchable option picker with icons and themes"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/Kevin-Ramirez127/r-modals"
 keywords = ["modal", "launcher", "gui"]
 categories = ["gui"]
 
@@ -15,5 +16,14 @@ lightningcss = "1.0.0-alpha.72"
 
 [dev-dependencies]
 
+[[bin]]
+name = "quick-modals"
+path = "src/bin/quick-modals.rs"
+
 [features]
 default = []
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -26,8 +26,8 @@ fn main() -> Result<(), String> {
     // Hover a tile to see its name; type to filter; arrows move, Enter picks.
     //
     // ```sh
-    // cargo run --example image_picker            # uses ./assets
-    // cargo run --example image_picker -- ~/Pictures/wallpapers
+    // cargo run --bin quick-modals            # uses ./assets
+    // cargo run --bin quick-modals -- ~/Pictures/wallpapers
     // ```
     let dir = std::env::args()
         .nth(1)
@@ -65,7 +65,7 @@ fn main() -> Result<(), String> {
     // 2) Embedded bytes (works even when the directory is missing).
     modal = modal.option(
         ModalOption::new("bytes:terminal", "Terminal (embedded)")
-            .icon(include_bytes!("../assets/terminal.png").to_vec()),
+            .icon(include_bytes!("../../assets/terminal.png").to_vec()),
     );
 
     // 3) Procedural RGBA pixels — solid swatches.
