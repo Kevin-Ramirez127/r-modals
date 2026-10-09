@@ -8,9 +8,13 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Options** — label, description, and icons (file path, bytes, or raw RGBA)
 - **Submenus** — nest options with `.sub_option(...)` for drill-down navigation
 - **Actions** — run a command, shell one-liner, or Rust closure on select
-- **Search** — filters over label, id, and description, with case-sensitivity option
+- **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
+- **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
+- **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
+- **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`
 - **Layouts** — `List` rows or `Grid` image tiles
-- **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`
+- **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`, `Theme::auto()`
+- **dmenu mode** — pipe stdin to `quick-modals --dmenu`, pick goes to stdout (exit 0 pick · 1 cancel · 2 error)
 
 ## Install
 
@@ -44,6 +48,24 @@ if let Some(sel) = choice {
 ```
 
 Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + click works too.
+Extras: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P` move; `Ctrl+U` clears the query; `Space` toggles in `run_multi()`.
+
+## Dialogs
+
+```rust
+use quick_modals::{Confirm, Prompt};
+
+let name = Prompt::new("Your name?").placeholder("Jane").run().unwrap();
+let ok = Confirm::new("Greet?").message("Say hello?").run().unwrap();
+```
+
+## dmenu mode
+
+```sh
+ls ~/bin | quick-modals --dmenu --prompt "Run:" --fuzzy
+printf 'a\nb\nc' | quick-modals --dmenu --multi
+quick-modals --help
+```
 
 ## Theming
 
@@ -66,11 +88,15 @@ See `assets/theme.css` and `assets/themes/` for starting points.
 
 ```sh
 cargo run --example basic
+cargo run --example fuzzy
+cargo run --example multi
+cargo run --example dialogs
 cargo run --example sub_options
 cargo run --example actions
 cargo run --example themed_icons
 cargo run --example css_themed
 cargo run --bin quick-modals -- ~/Pictures/wallpapers
+ls ~/bin | cargo run --bin quick-modals -- --dmenu --prompt "Run:"
 ```
 
 ## Notes

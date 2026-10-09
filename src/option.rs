@@ -90,7 +90,6 @@ impl From<&[u8]> for IconSource {
 /// Runs on the calling thread, right where the action would have run.
 pub type ErrorAction =
     std::sync::Arc<dyn Fn(&crate::ModalSelection, &std::io::Error) + Send + Sync>;
-
 /// What happens when an option is picked (see [`ModalOption::command`],
 /// [`ModalOption::shell`], [`ModalOption::on_select`]).
 ///
@@ -127,12 +126,10 @@ impl SelectAction {
     /// the spawn result for processes.
     pub(crate) fn execute(&self, sel: &crate::ModalSelection) -> std::io::Result<()> {
         match self {
-            SelectAction::Command { program, args } => {
-                std::process::Command::new(program)
-                    .args(args)
-                    .spawn()
-                    .map(|_| ())
-            }
+            SelectAction::Command { program, args } => std::process::Command::new(program)
+                .args(args)
+                .spawn()
+                .map(|_| ()),
             SelectAction::Shell(cmd) => {
                 let (prog, flag) = if cfg!(windows) {
                     ("cmd", "/C")
@@ -184,6 +181,19 @@ pub struct ModalOption {
     /// `None` (default) means failures stay silent. Never fires without an
     /// action, and never fires for Rust callbacks (they cannot spawn-fail).
     pub on_error: Option<ErrorAction>,
+    /// When true the row is shown dimmed and cannot be picked or drilled
+    /// into. Defaults to false.
+    pub disabled: bool,
+    /// When true the row is a visual separator/header: never pickable,
+    /// never matches a non-empty query, always listed on empty query.
+    /// Defaults to false.
+    pub separator: bool,
+    /// Optional keyboard-shortcut hint rendered right-aligned in list rows
+    /// (e.g. `"Ctrl+O"`). Purely visual. Defaults to `None`.
+    pub shortcut: Option<String>,
+    /// Extra search keywords matched alongside label/id/description
+    /// (both substring and fuzzy modes). Defaults to empty.
+    pub keywords: Vec<String>,
 }
 
 impl std::fmt::Debug for ModalOption {
@@ -197,6 +207,10 @@ impl std::fmt::Debug for ModalOption {
             .field("children", &self.children)
             .field("action", &self.action)
             .field("on_error", &self.on_error.as_ref().map(|_| ".."))
+            .field("disabled", &self.disabled)
+            .field("separator", &self.separator)
+            .field("shortcut", &self.shortcut)
+            .field("keywords", &self.keywords)
             .finish()
     }
 }
@@ -213,6 +227,19 @@ impl ModalOption {
             children: Vec::new(),
             action: None,
             on_error: None,
+            disabled: false,
+            separator: false,
+            shortcut: None,
+            keywords: Vec::new(),
+        }
+    }
+
+    /// Visual separator/header row. Never pickable and never matches a
+    /// non-empty query; listed on empty queries so sections keep their shape.
+    pub fn separator(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            separator: true,
+            ..Self::new(id, label)
         }
     }
 
@@ -242,6 +269,41 @@ impl ModalOption {
     pub fn unsearchable(mut self, yes: bool) -> Self {
         self.unsearchable = yes;
         self
+    }
+
+    /// Mark this option as disabled: shown dimmed, skipped by activation
+    /// (Enter/click does nothing). Still listed and searchable.
+    pub fn disabled(mut self, yes: bool) -> Self {
+        self.disabled = yes;
+        self
+    }
+
+    /// Shortcut hint rendered right-aligned in list rows (visual only).
+    pub fn shortcut(mut self, hint: impl Into<String>) -> Self {
+        self.shortcut = Some(hint.into());
+        self
+    }
+
+    /// Extra search keywords (matched in both substring and fuzzy modes).
+    pub fn keywords<I, S>(mut self, kws: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.keywords.extend(kws.into_iter().map(Into::into));
+        self
+    }
+
+    /// Single extra search keyword.
+    pub fn keyword(mut self, kw: impl Into<String>) -> Self {
+        self.keywords.push(kw.into());
+        self
+    }
+
+    /// Whether this row can ever be activated (picked or drilled into).
+    /// Separators and disabled rows are never activatable.
+    pub fn activatable(&self) -> bool {
+        !self.separator && !self.disabled
     }
 
     /// Nest one sub-option under this option, turning it into a submenu.
@@ -347,10 +409,15 @@ impl ModalOption {
     /// Prefer [`ModalOption::matches_query`] in hot paths: it checks each
     /// field separately and short-circuits, avoiding this allocation.
     pub(crate) fn haystack(&self) -> String {
-        match &self.description {
+        let mut s = match &self.description {
             Some(d) => format!("{} {} {}", self.label, self.id, d),
             None => format!("{} {}", self.label, self.id),
+        };
+        for k in &self.keywords {
+            s.push(' ');
+            s.push_str(k);
         }
+        s
     }
 
     /// Lowercased haystack, precomputed once per modal for the
@@ -372,7 +439,19 @@ impl ModalOption {
     /// hit skips the id/description work entirely.
     /// A parent also matches when any descendant matches (gateway to drill
     /// into), even if the parent itself is `unsearchable`.
-    pub(crate) fn matches_query(&self, query: &str, query_lower: &str, case_sensitive: bool) -> bool {
+    /// Separators never match a non-empty query.
+    pub(crate) fn matches_query(
+        &self,
+        query: &str,
+        query_lower: &str,
+        case_sensitive: bool,
+    ) -> bool {
+        if self.separator {
+            return self
+                .children
+                .iter()
+                .any(|c| c.matches_query(query, query_lower, case_sensitive));
+        }
         let own = if self.unsearchable {
             false
         } else if case_sensitive {
@@ -382,6 +461,7 @@ impl ModalOption {
                     .description
                     .as_deref()
                     .is_some_and(|d| d.contains(query))
+                || self.keywords.iter().any(|k| k.contains(query))
         } else {
             // `to_lowercase` allocates; do it field-by-field with early exit
             // so a label match never touches id/description.
@@ -391,11 +471,61 @@ impl ModalOption {
                     .description
                     .as_deref()
                     .is_some_and(|d| d.to_lowercase().contains(query_lower))
+                || self
+                    .keywords
+                    .iter()
+                    .any(|k| k.to_lowercase().contains(query_lower))
         };
         own || self
             .children
             .iter()
             .any(|c| c.matches_query(query, query_lower, case_sensitive))
+    }
+
+    /// Fuzzy (subsequence) match over label + id + description + keywords.
+    /// Returns the best field score, or `None` when nothing matches.
+    /// Parents gateway-match via descendants, like [`ModalOption::matches_query`].
+    pub(crate) fn fuzzy_score(&self, query: &str, case_sensitive: bool) -> Option<i32> {
+        if self.separator {
+            return self
+                .children
+                .iter()
+                .filter_map(|c| c.fuzzy_score(query, case_sensitive))
+                .max();
+        }
+        if self.unsearchable {
+            return self
+                .children
+                .iter()
+                .filter_map(|c| c.fuzzy_score(query, case_sensitive))
+                .max();
+        }
+        let mut best: Option<i32> = None;
+        let mut consider = |text: &str| {
+            if let Some(s) = crate::fuzzy_score(text, query, case_sensitive) {
+                best = Some(best.map_or(s, |b: i32| b.max(s)));
+            }
+        };
+        consider(&self.label);
+        consider(&self.id);
+        if let Some(d) = &self.description {
+            consider(d);
+        }
+        for k in &self.keywords {
+            consider(k);
+        }
+        if let Some(child_best) = self
+            .children
+            .iter()
+            .filter_map(|c| c.fuzzy_score(query, case_sensitive))
+            .max()
+        {
+            // Gateway matches rank below direct matches so the real target
+            // sorts first when both are visible at the same level.
+            let gated = child_best.saturating_sub(5);
+            best = Some(best.map_or(gated, |b: i32| b.max(gated)));
+        }
+        best
     }
 }
 
@@ -427,10 +557,7 @@ mod tests {
         assert!(!leaf.has_children());
         let parent = ModalOption::new("p", "Parent")
             .sub_option(leaf)
-            .sub_options([
-                ModalOption::new("a", "A"),
-                ModalOption::new("b", "B"),
-            ]);
+            .sub_options([ModalOption::new("a", "A"), ModalOption::new("b", "B")]);
         assert!(parent.has_children());
         assert_eq!(parent.children.len(), 3);
         assert_eq!(parent.children[0].id, "l");
@@ -460,6 +587,31 @@ mod tests {
             .sub_option(ModalOption::new("c", "Child"));
         assert!(!parent.matches_query("Parent", "parent", false));
         assert!(parent.matches_query("Child", "child", false));
+    }
+
+    #[test]
+    fn disabled_and_separator_never_activate() {
+        assert!(!ModalOption::new("x", "X").disabled(true).activatable());
+        assert!(!ModalOption::separator("s", "Section").activatable());
+        assert!(ModalOption::new("x", "X").activatable());
+    }
+
+    #[test]
+    fn separator_never_matches_filtered_query() {
+        let s = ModalOption::separator("s", "Section");
+        assert!(!s.matches_query("Section", "section", false));
+        assert!(s.fuzzy_score("sec", false).is_none());
+    }
+
+    #[test]
+    fn shortcut_and_keywords_builders() {
+        let o = ModalOption::new("x", "X")
+            .shortcut("Ctrl+O")
+            .keyword("extra")
+            .keywords(["more", "stuff"]);
+        assert_eq!(o.shortcut.as_deref(), Some("Ctrl+O"));
+        assert_eq!(o.keywords, vec!["extra", "more", "stuff"]);
+        assert!(o.matches_query("stuff", "stuff", false));
     }
 
     #[test]
@@ -502,6 +654,7 @@ mod tests {
             index: 0,
             path: vec![0],
             query: String::new(),
+            custom_input: false,
         };
         opt.action.as_ref().unwrap().execute(&sel).unwrap();
         assert_eq!(*seen.lock().unwrap(), vec!["ff".to_string()]);
@@ -522,6 +675,7 @@ mod tests {
             index: 0,
             path: vec![0],
             query: String::new(),
+            custom_input: false,
         };
         assert!(opt.action.as_ref().unwrap().execute(&sel).is_err());
     }

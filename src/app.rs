@@ -67,7 +67,9 @@ pub(crate) struct ModalApp {
     /// (update() used to run the full filter 3x per frame).
     filter_query: String,
     filter_case_sensitive: bool,
+    filter_fuzzy: bool,
     filter_enabled: bool,
+    filter_max: Option<usize>,
     filter_visible: Vec<usize>,
     filter_initialized: bool,
     /// egui style persists across frames: applying it once avoids cloning
@@ -77,7 +79,7 @@ pub(crate) struct ModalApp {
 
 impl ModalApp {
     pub(crate) fn new(
-        _cc: &eframe::CreationContext<'_>,
+        cc: &eframe::CreationContext<'_>,
         modal: Modal,
         result: Arc<Mutex<Option<ModalSelection>>>,
     ) -> Self {
@@ -105,7 +107,9 @@ impl ModalApp {
             level_lowered: Vec::new(),
             filter_query: String::new(),
             filter_case_sensitive: false,
+            filter_fuzzy: false,
             filter_enabled: true,
+            filter_max: None,
             filter_visible: Vec::new(),
             filter_initialized: false,
             style_applied: false,
@@ -114,6 +118,33 @@ impl ModalApp {
         // bytes or (re)builds search strings.
         app.refresh_level_caches();
         app.refresh_filter_cache();
+        // Custom fonts: install into egui and set as default family.
+        if !app.modal.fonts.is_empty() {
+            let mut fonts = egui::FontDefinitions::default();
+            for (name, bytes) in &app.modal.fonts {
+                fonts.font_data.insert(
+                    name.clone(),
+                    egui::FontData::from_owned(bytes.clone()).into(),
+                );
+                if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+                    fam.insert(0, name.clone());
+                }
+                if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+                    fam.insert(0, name.clone());
+                }
+            }
+            cc.egui_ctx.set_fonts(fonts);
+        }
+        // Initial cursor honors `default_selected` when visible.
+        if let Some(want) = &app.modal.default_selected {
+            if let Some(pos) = app
+                .filter_visible
+                .iter()
+                .position(|&i| app.level_slice().get(i).is_some_and(|o| &o.id == want))
+            {
+                app.cursor = pos;
+            }
+        }
         app
     }
 
@@ -159,10 +190,7 @@ impl ModalApp {
     /// per frame, so hashing image bytes here is fine).
     fn refresh_level_caches(&mut self) {
         let level = self.level_slice();
-        let keys: Vec<Option<String>> = level
-            .iter()
-            .map(|o| o.icon.cache_key(&o.id))
-            .collect();
+        let keys: Vec<Option<String>> = level.iter().map(|o| o.icon.cache_key(&o.id)).collect();
         // Recursive lowering: a parent gateway-matches descendant queries.
         let lowered: Vec<String> = level.iter().map(|o| o.haystack_lower()).collect();
         self.level_icon_keys = keys;
@@ -211,10 +239,14 @@ impl ModalApp {
     fn refresh_filter_cache(&mut self) {
         let enabled = self.modal.search.enabled;
         let case_sensitive = self.modal.search.case_sensitive;
+        let fuzzy = self.modal.search.fuzzy;
+        let max = self.modal.max_results;
         if self.filter_initialized
             && self.filter_query == self.query
             && self.filter_case_sensitive == case_sensitive
+            && self.filter_fuzzy == fuzzy
             && self.filter_enabled == enabled
+            && self.filter_max == max
         {
             return;
         }
@@ -236,27 +268,41 @@ impl ModalApp {
             }
         }
         let lowered = &self.level_lowered;
-        if !enabled || query.is_empty() {
-            self.filter_visible = (0..level.len()).collect();
+        let mut visible: Vec<usize> = if !enabled || query.is_empty() {
+            (0..level.len()).collect()
+        } else if fuzzy {
+            let mut scored: Vec<(usize, i32)> = level
+                .iter()
+                .enumerate()
+                .filter_map(|(i, o)| o.fuzzy_score(&query, case_sensitive).map(|s| (i, s)))
+                .collect();
+            scored.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            scored.into_iter().map(|(i, _)| i).collect()
         } else if case_sensitive {
-            self.filter_visible = level
+            level
                 .iter()
                 .enumerate()
                 .filter(|(_, o)| o.matches_query(&query, "", true))
                 .map(|(i, _)| i)
-                .collect();
+                .collect()
         } else {
             let q = query.to_lowercase();
-            self.filter_visible = level
+            level
                 .iter()
                 .enumerate()
                 .filter(|(i, _)| lowered.get(*i).is_some_and(|h| h.contains(&q)))
                 .map(|(i, _)| i)
-                .collect();
+                .collect()
+        };
+        if let Some(m) = max {
+            visible.truncate(m);
         }
+        self.filter_visible = visible;
         self.filter_query = self.query.clone();
         self.filter_case_sensitive = case_sensitive;
+        self.filter_fuzzy = fuzzy;
         self.filter_enabled = enabled;
+        self.filter_max = max;
         self.filter_initialized = true;
     }
 
@@ -268,6 +314,9 @@ impl ModalApp {
     fn activate(&self, visible: &[usize], pos: usize) -> Option<RowAction> {
         let &idx = visible.get(pos)?;
         let opt = self.level_opt(idx)?;
+        if !opt.activatable() {
+            return None;
+        }
         let mut path = self.nav_path.clone();
         path.push(idx);
         if opt.has_children() {
@@ -279,6 +328,7 @@ impl ModalApp {
             index: idx,
             path,
             query: self.query.clone(),
+            custom_input: false,
         }))
     }
 
@@ -303,6 +353,67 @@ impl ModalApp {
         let tex = ctx.load_texture(key, img, egui::TextureOptions::LINEAR);
         textures.insert(key.clone(), tex.clone());
         Some(tex)
+    }
+
+    /// Label with the first query occurrence underlined in accent.
+    /// Underline never changes glyph metrics, so highlighting can't shift
+    /// rows (unlike bold). Falls back to a plain label on no match.
+    fn highlighted_label(
+        ui: &mut egui::Ui,
+        label: &str,
+        query: &str,
+        case_sensitive: bool,
+        size: f32,
+        base: egui::Color32,
+        accent: egui::Color32,
+    ) {
+        let range = if query.is_empty() {
+            None
+        } else if case_sensitive {
+            label.find(query).map(|s| (s, s + query.len()))
+        } else {
+            let l = label.to_lowercase();
+            let q = query.to_lowercase();
+            l.find(&q).map(|s| {
+                // Map byte offsets through char boundaries: lowercase can
+                // shift widths, so resolve via char indices.
+                let start_char = l[..s].chars().count();
+                let q_chars = q.chars().count();
+                let start = label
+                    .char_indices()
+                    .nth(start_char)
+                    .map(|(b, _)| b)
+                    .unwrap_or(label.len());
+                let end = label
+                    .char_indices()
+                    .nth(start_char + q_chars)
+                    .map(|(b, _)| b)
+                    .unwrap_or(label.len());
+                (start, end)
+            })
+        };
+        match range {
+            Some((s, e)) if s < e && e <= label.len() => {
+                ui.horizontal_wrapped(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    if s > 0 {
+                        ui.label(egui::RichText::new(&label[..s]).size(size).color(base));
+                    }
+                    ui.label(
+                        egui::RichText::new(&label[s..e])
+                            .size(size)
+                            .color(accent)
+                            .underline(),
+                    );
+                    if e < label.len() {
+                        ui.label(egui::RichText::new(&label[e..]).size(size).color(base));
+                    }
+                });
+            }
+            _ => {
+                ui.label(egui::RichText::new(label).size(size).color(base));
+            }
+        }
     }
 
     /// List rows: thumbnail followed by label + description.
@@ -390,11 +501,27 @@ impl ModalApp {
                                     // measures wider/taller, so selecting a
                                     // row would resize it and shift every row
                                     // below it. Selection is shown by row fill.
-                                    ui.label(
-                                        egui::RichText::new(&opt.label)
-                                            .size(t.font_size)
-                                            .color(t.text),
-                                    );
+                                    // Disabled rows render dimmed; separators
+                                    // render as dim centered headers.
+                                    let label_color =
+                                        if opt.disabled { t.dim_text } else { t.text };
+                                    if opt.separator {
+                                        ui.label(
+                                            egui::RichText::new(&opt.label)
+                                                .size(t.font_size * 0.85)
+                                                .color(t.dim_text),
+                                        );
+                                    } else {
+                                        Self::highlighted_label(
+                                            ui,
+                                            &opt.label,
+                                            &self.query,
+                                            self.modal.search.case_sensitive,
+                                            t.font_size,
+                                            label_color,
+                                            t.accent,
+                                        );
+                                    }
                                     if t.show_descriptions {
                                         if let Some(d) = &opt.description {
                                             ui.label(
@@ -405,16 +532,26 @@ impl ModalApp {
                                         }
                                     }
                                 });
-                                // Submenu affordance: parents drill deeper.
-                                if opt.has_children() {
+                                // Right-aligned trailing hints: shortcut first,
+                                // then submenu affordance.
+                                if opt.shortcut.is_some() || opt.has_children() {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            ui.label(
-                                                egui::RichText::new("›")
-                                                    .size(t.font_size)
-                                                    .color(t.dim_text),
-                                            );
+                                            if opt.has_children() {
+                                                ui.label(
+                                                    egui::RichText::new("›")
+                                                        .size(t.font_size)
+                                                        .color(t.dim_text),
+                                                );
+                                            }
+                                            if let Some(sc) = &opt.shortcut {
+                                                ui.label(
+                                                    egui::RichText::new(sc)
+                                                        .size(t.font_size * 0.8)
+                                                        .color(t.dim_text),
+                                                );
+                                            }
                                         },
                                     );
                                 }
@@ -433,18 +570,23 @@ impl ModalApp {
                     if row.response.clicked() {
                         let mut path = nav_snapshot.clone();
                         path.push(opt_idx);
-                        action = if opt.has_children() {
-                            Some(RowAction::Drill { index: opt_idx })
+                        // Disabled / separator rows never activate.
+                        if !opt.activatable() {
+                        } else if opt.has_children() {
+                            action = Some(RowAction::Drill { index: opt_idx });
                         } else {
-                            Some(RowAction::Pick(ModalSelection {
+                            action = Some(RowAction::Pick(ModalSelection {
                                 id: opt.id.clone(),
                                 label: opt.label.clone(),
                                 index: opt_idx,
                                 path,
                                 query: query.clone(),
-                            }))
-                        };
-                        break;
+                                custom_input: false,
+                            }));
+                        }
+                        if action.is_some() {
+                            break;
+                        }
                     }
                 }
             });
@@ -507,8 +649,7 @@ impl ModalApp {
                 // collapse the grid (e.g. to 2 columns) and stick there after
                 // the filter is cleared.
                 let outer = tile + 8.0; // tile + Frame inner_margin on both sides
-                let computed = ((ui.available_width() + t.item_spacing)
-                    / (outer + t.item_spacing))
+                let computed = ((ui.available_width() + t.item_spacing) / (outer + t.item_spacing))
                     .floor() as usize;
                 let computed = computed.max(1);
                 let cols = if full_list {
@@ -589,7 +730,7 @@ impl ModalApp {
                                 if tile_resp.hovered() && hover_fresh {
                                     *cursor = pos;
                                 }
-                                if tile_resp.clicked() {
+                                if tile_resp.clicked() && opt.activatable() {
                                     let mut path = nav_snapshot.clone();
                                     path.push(opt_idx);
                                     action = if opt.has_children() {
@@ -601,6 +742,7 @@ impl ModalApp {
                                             index: opt_idx,
                                             path,
                                             query: query.clone(),
+                                            custom_input: false,
                                         }))
                                     };
                                     break;
@@ -1141,22 +1283,20 @@ mod tests {
     fn nested_app() -> (egui::Context, ModalApp, eframe::Frame) {
         let ctx = egui::Context::default();
         let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("settings")
-            .options([
-                crate::ModalOption::new("disp", "Display").sub_options([
-                    crate::ModalOption::new("res", "Resolution").sub_options([
-                        crate::ModalOption::new("1080p", "1920×1080"),
-                        crate::ModalOption::new("4k", "3840×2160"),
-                    ]),
-                    crate::ModalOption::new("bright", "Brightness").sub_options([
-                        crate::ModalOption::new("bright-low", "Low"),
-                        crate::ModalOption::new("bright-high", "High"),
-                    ]),
+        let modal = crate::Modal::new("settings").options([
+            crate::ModalOption::new("disp", "Display").sub_options([
+                crate::ModalOption::new("res", "Resolution").sub_options([
+                    crate::ModalOption::new("1080p", "1920×1080"),
+                    crate::ModalOption::new("4k", "3840×2160"),
                 ]),
-                crate::ModalOption::new("snd", "Sound").sub_option(
-                    crate::ModalOption::new("vol", "Volume"),
-                ),
-            ]);
+                crate::ModalOption::new("bright", "Brightness").sub_options([
+                    crate::ModalOption::new("bright-low", "Low"),
+                    crate::ModalOption::new("bright-high", "High"),
+                ]),
+            ]),
+            crate::ModalOption::new("snd", "Sound")
+                .sub_option(crate::ModalOption::new("vol", "Volume")),
+        ]);
         let result = Arc::new(Mutex::new(None));
         let app = ModalApp::new(&cc, modal, result);
         let frame = eframe::Frame::_new_kittest();
@@ -1193,7 +1333,7 @@ mod tests {
         assert_eq!(app.nav_path, vec![0]);
         assert!(app.query.is_empty());
         assert_eq!(app.filter_visible.len(), 2); // Resolution, Brightness
-        // Move to Brightness (1) → drill → Low/High.
+                                                 // Move to Brightness (1) → drill → Low/High.
         app.cursor = 1;
         t += 1.0 / 60.0;
         let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
@@ -1398,7 +1538,21 @@ impl eframe::App for ModalApp {
 
         // Global keys — consumed under a single input lock instead of one
         // lock per key.
-        let (esc, down, right, up, left, enter) = ctx.input_mut(|i| {
+        let (
+            esc,
+            down,
+            right,
+            up,
+            left,
+            enter,
+            home,
+            end,
+            page_down,
+            page_up,
+            ctrl_n,
+            ctrl_p,
+            ctrl_u,
+        ) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
@@ -1406,8 +1560,19 @@ impl eframe::App for ModalApp {
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp),
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::N),
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::P),
+                i.consume_key(egui::Modifiers::CTRL, egui::Key::U),
             )
         });
+        if ctrl_u {
+            self.query.clear();
+            self.cursor = 0;
+        }
         if esc {
             if self.nav_path.is_empty() {
                 self.finish(None, ctx);
@@ -1442,7 +1607,7 @@ impl eframe::App for ModalApp {
         let list = !grid;
         let row_step = if grid { self.last_columns.max(1) } else { 1 };
 
-        if down && !visible.is_empty() {
+        if (down || ctrl_n) && !visible.is_empty() {
             self.cursor = if grid {
                 (self.cursor + row_step).min(visible.len() - 1)
             } else {
@@ -1467,7 +1632,7 @@ impl eframe::App for ModalApp {
                 self.scroll_to_cursor = self.modal.center_on_navigate;
             }
         }
-        if up && !visible.is_empty() {
+        if (up || ctrl_p) && !visible.is_empty() {
             self.cursor = if grid {
                 self.cursor.saturating_sub(row_step)
             } else {
@@ -1486,16 +1651,52 @@ impl eframe::App for ModalApp {
                 self.scroll_to_cursor = self.modal.center_on_navigate;
             }
         }
+        if (home || page_up) && !visible.is_empty() {
+            // Home jumps to the top; PageUp jumps 10 rows.
+            self.cursor = if home {
+                0
+            } else {
+                self.cursor.saturating_sub(10 * row_step.max(1))
+            };
+            self.scroll_to_cursor = self.modal.center_on_navigate;
+        }
+        if (end || page_down) && !visible.is_empty() {
+            self.cursor = if end {
+                visible.len() - 1
+            } else {
+                (self.cursor + 10 * row_step.max(1)).min(visible.len() - 1)
+            };
+            self.scroll_to_cursor = self.modal.center_on_navigate;
+        }
         if enter {
-            match self.activate(&visible, self.cursor) {
-                Some(RowAction::Pick(sel)) => {
-                    self.finish(Some(sel), ctx);
+            if visible.is_empty() {
+                // Command-palette style: return the typed text itself.
+                if self.modal.allow_custom_input && !self.query.is_empty() {
+                    let q = self.query.clone();
+                    self.finish(
+                        Some(ModalSelection {
+                            id: q.clone(),
+                            label: q.clone(),
+                            index: 0,
+                            path: self.nav_path.clone(),
+                            query: q,
+                            custom_input: true,
+                        }),
+                        ctx,
+                    );
                     return;
                 }
-                // Drilling clears the query; the panel below recomputes the
-                // visible list for the new level, so fall through.
-                Some(RowAction::Drill { index }) => self.enter_level(index),
-                None => {}
+            } else {
+                match self.activate(&visible, self.cursor) {
+                    Some(RowAction::Pick(sel)) => {
+                        self.finish(Some(sel), ctx);
+                        return;
+                    }
+                    // Drilling clears the query; the panel below recomputes the
+                    // visible list for the new level, so fall through.
+                    Some(RowAction::Drill { index }) => self.enter_level(index),
+                    None => {}
+                }
             }
         }
 
@@ -1516,8 +1717,7 @@ impl eframe::App for ModalApp {
 
         // One input poll per frame; rows/tiles receive the bool instead of
         // each locking `ctx.input` themselves (O(n) locks per frame).
-        let hover_fresh =
-            ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos;
+        let hover_fresh = ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos;
 
         let frame = egui::Frame::new()
             .fill(t.background)
@@ -1552,15 +1752,11 @@ impl eframe::App for ModalApp {
             // radius). The TextEdit itself is frameless so the frame is the
             // only box drawn.
             if self.modal.search.enabled {
-                let search_font =
-                    egui::FontId::proportional(t.effective_search_font_size());
+                let search_font = egui::FontId::proportional(t.effective_search_font_size());
                 let resp = egui::Frame::new()
                     .fill(t.search_background)
                     .corner_radius(t.effective_search_radius())
-                    .stroke(egui::Stroke::new(
-                        t.search_border_width,
-                        t.search_border,
-                    ))
+                    .stroke(egui::Stroke::new(t.search_border_width, t.search_border))
                     .inner_margin(egui::Margin::symmetric(10, 7))
                     .show(ui, |ui| {
                         ui.add(
@@ -1600,14 +1796,23 @@ impl eframe::App for ModalApp {
             // frame behind typing.
             let visible = self.visible_indices();
             if visible.is_empty() {
-                ui.colored_label(t.dim_text, "No matches");
-                return;
-            }
-
-            if matches!(self.modal.layout, Layout::Grid) {
+                let msg = self.modal.empty_message.clone();
+                ui.colored_label(t.dim_text, &msg);
+                if self.modal.allow_custom_input && !self.query.is_empty() {
+                    ui.colored_label(t.dim_text, format!("Enter ↵: use \"{}\"", self.query));
+                }
+            } else if matches!(self.modal.layout, Layout::Grid) {
                 self.show_grid(ctx, ui, &visible, &t, hover_fresh);
             } else {
                 self.show_list(ctx, ui, &visible, &t, hover_fresh);
+            }
+            if let Some(hint) = self.modal.footer_hint.clone() {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(hint)
+                        .size(t.font_size * 0.78)
+                        .color(t.dim_text),
+                );
             }
         });
 

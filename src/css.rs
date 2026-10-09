@@ -412,7 +412,8 @@ fn is_square_size(target: Target, decl: &Property) -> bool {
 /// Tiles and icons are square: `width`/`height` must match when both are
 /// given (a single dimension is enough). Last one wins per pass.
 fn apply_square_size(theme: &mut Theme, target: Target, decls: &[Property]) -> Result<(), String> {
-    let (name, width_what, height_what, set): (&str, &str, &str, fn(&mut Theme, f32)) = match target {
+    let (name, width_what, height_what, set): (&str, &str, &str, fn(&mut Theme, f32)) = match target
+    {
         Target::Tile => ("tile", "tile width", "tile height", |t, v| t.tile_size = v),
         Target::TileIcon => (
             "tile icon",
@@ -581,10 +582,7 @@ mod tests {
             search hint { color: #888895; }
             "#,
         );
-        assert_eq!(
-            t.search_background,
-            egui::Color32::from_rgb(34, 34, 40)
-        );
+        assert_eq!(t.search_background, egui::Color32::from_rgb(34, 34, 40));
         assert_eq!(t.search_text, egui::Color32::from_rgb(240, 240, 245));
         assert_eq!(t.search_font_size, Some(18.0));
         assert_eq!(t.effective_search_font_size(), 18.0);

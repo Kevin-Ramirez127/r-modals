@@ -1,11 +1,13 @@
 [package]
 name = "quick-modals"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Instant modals for Rust — searchable option picker with icons and themes"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/Kevin-Ramirez127/r-modals"
-keywords = ["modal", "launcher", "gui"]
+homepage = "https://github.com/Kevin-Ramirez127/r-modals"
+readme = "README.md"
+keywords = ["modal", "launcher", "gui", "dmenu", "picker"]
 categories = ["gui"]
 
 [dependencies]

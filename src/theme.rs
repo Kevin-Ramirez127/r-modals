@@ -143,6 +143,26 @@ impl Theme {
         transparent_dark_preset().clone()
     }
 
+    /// Best-effort system theme: returns [`Theme::light`] when the
+    /// environment looks like a light setup (`COLORFGBG` ending in
+    /// `;15`, `;7`, or `THEME=light`), otherwise [`Theme::dark`].
+    /// No desktop-portal query is done — deterministic and headless-safe.
+    pub fn auto() -> Self {
+        let light = std::env::var("QUICK_MODALS_THEME")
+            .map(|v| v.eq_ignore_ascii_case("light"))
+            .unwrap_or(false)
+            || std::env::var("COLORFGBG").is_ok_and(|v| {
+                v.rsplit(';')
+                    .next()
+                    .is_some_and(|bg| matches!(bg.trim(), "15" | "7" | "11" | "12" | "14"))
+            });
+        if light {
+            Self::light()
+        } else {
+            Self::dark()
+        }
+    }
+
     /// Effective option corner radius: explicit override or 60% of the modal radius.
     pub(crate) fn effective_tile_radius(&self) -> f32 {
         self.tile_radius.unwrap_or(self.corner_radius * 0.6)

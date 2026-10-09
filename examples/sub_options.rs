@@ -29,21 +29,16 @@ fn main() -> Result<(), String> {
             ModalOption::new("sound", "Sound")
                 .description("Volume and output device")
                 .sub_option(ModalOption::new("volume", "Volume"))
-                .sub_option(
-                    ModalOption::new("output", "Output").sub_options([
-                        ModalOption::new("speakers", "Speakers"),
-                        ModalOption::new("headphones", "Headphones"),
-                    ]),
-                ),
+                .sub_option(ModalOption::new("output", "Output").sub_options([
+                    ModalOption::new("speakers", "Speakers"),
+                    ModalOption::new("headphones", "Headphones"),
+                ])),
         )
         .option(ModalOption::new("about", "About").description("No submenu here"))
         .run()?;
 
     match choice {
-        Some(sel) => println!(
-            "picked {} ({}) at path {:?}",
-            sel.label, sel.id, sel.path
-        ),
+        Some(sel) => println!("picked {} ({}) at path {:?}", sel.label, sel.id, sel.path),
         None => println!("cancelled"),
     }
     Ok(())

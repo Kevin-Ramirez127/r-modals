@@ -1,4 +1,4 @@
-use crate::{filter_options, Layout, ModalOption, Position, SearchConfig, Theme};
+use crate::{filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, Theme};
 use std::sync::{Arc, Mutex};
 
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
@@ -16,6 +16,9 @@ pub struct ModalSelection {
     pub path: Vec<usize>,
     /// Final search query text.
     pub query: String,
+    /// True when the pick is free-typed text (no option matched and
+    /// [`Modal::allow_custom_input`] was on). `id`/`label` equal the query.
+    pub custom_input: bool,
 }
 
 /// Builder for an instant modal.
@@ -44,6 +47,14 @@ pub struct Modal {
     pub(crate) position: Position,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
+    pub(crate) default_selected: Option<String>,
+    pub(crate) allow_custom_input: bool,
+    pub(crate) empty_message: String,
+    pub(crate) footer_hint: Option<String>,
+    pub(crate) multi_select: bool,
+    pub(crate) max_results: Option<usize>,
+    pub(crate) fonts: Vec<(String, Vec<u8>)>,
+    pub(crate) history_file: Option<String>,
 }
 
 impl Modal {
@@ -62,6 +73,14 @@ impl Modal {
             position: Position::Center,
             initial_query: String::new(),
             app_id: "quick-modals".to_string(),
+            default_selected: None,
+            allow_custom_input: false,
+            empty_message: "No matches".to_string(),
+            footer_hint: None,
+            multi_select: false,
+            max_results: None,
+            fonts: Vec::new(),
+            history_file: None,
         }
     }
 
@@ -92,6 +111,13 @@ impl Modal {
     /// Case-sensitive search. Defaults to `false`.
     pub fn case_sensitive(mut self, yes: bool) -> Self {
         self.search.case_sensitive = yes;
+        self
+    }
+
+    /// Subsequence fuzzy match (ranked best-first) instead of substring.
+    /// Defaults to `false`.
+    pub fn fuzzy(mut self, yes: bool) -> Self {
+        self.search.fuzzy = yes;
         self
     }
 
@@ -176,13 +202,13 @@ impl Modal {
     }
 
     /// Theme with the stylesheet (if any) applied. Used by [`Modal::run`].
-    pub(crate) fn resolved_theme(&self) -> Result<Theme, String> {
+    pub(crate) fn resolved_theme(&self) -> Result<Theme, ModalError> {
         let mut theme = self.theme.clone();
         if let Some(css) = &self.stylesheet {
-            theme.apply_css(css)?;
+            theme.apply_css(css).map_err(ModalError::Css)?;
         }
         if let Some(css) = &self.stylesheet_override {
-            theme.apply_css(css)?;
+            theme.apply_css(css).map_err(ModalError::Css)?;
         }
         Ok(theme)
     }
@@ -204,18 +230,142 @@ impl Modal {
         self
     }
 
+    /// Pre-select the option with this `id` (initial cursor position).
+    /// No-op when the id is absent from the initial visible list.
+    pub fn default_selected(mut self, id: impl Into<String>) -> Self {
+        self.default_selected = Some(id.into());
+        self
+    }
+
+    /// When true, pressing Enter with no matches returns the typed query
+    /// itself (`id == label == query`, `custom_input: true`) instead of
+    /// doing nothing. Command-palette style. Defaults to `false`.
+    pub fn allow_custom_input(mut self, yes: bool) -> Self {
+        self.allow_custom_input = yes;
+        self
+    }
+
+    /// Message shown when the filter matches nothing. Defaults to
+    /// `"No matches"`.
+    pub fn empty_message(mut self, msg: impl Into<String>) -> Self {
+        self.empty_message = msg.into();
+        self
+    }
+
+    /// Small hint line rendered at the bottom of the modal
+    /// (e.g. `"Enter pick · Esc cancel · Space toggle"`). Defaults to none.
+    pub fn footer_hint(mut self, hint: impl Into<String>) -> Self {
+        self.footer_hint = Some(hint.into());
+        self
+    }
+
+    /// Space-toggles multi-select; Enter confirms. Prefer
+    /// [`Modal::run_multi`] to collect every pick — [`Modal::run`] still
+    /// returns only the first pick in this mode for compatibility.
+    pub fn multi_select(mut self, yes: bool) -> Self {
+        self.multi_select = yes;
+        self
+    }
+
+    /// Cap the number of rows/tiles shown (best matches first in fuzzy
+    /// mode). `None` (default) shows everything. Useful for 10k-option
+    /// lists.
+    pub fn max_results(mut self, n: usize) -> Self {
+        self.max_results = Some(n);
+        self
+    }
+
+    /// Register a custom font from TTF/OTF bytes. `name` becomes the
+    /// egui font family name; CSS `font-size` still controls sizing.
+    /// Installed into the egui context at startup; also set as default.
+    pub fn font(mut self, name: impl Into<String>, ttf_bytes: Vec<u8>) -> Self {
+        self.fonts.push((name.into(), ttf_bytes));
+        self
+    }
+
+    /// Persist pick counts to this file (one `id count` per line) and
+    /// sort top-level options most-used-first on open. Missing/unreadable
+    /// files are ignored; failures to save are ignored.
+    pub fn history_file(mut self, path: impl Into<String>) -> Self {
+        self.history_file = Some(path.into());
+        self
+    }
+
     /// Filter without opening a window (useful for tests / headless use).
     pub fn filtered_indices(&self, query: &str) -> Vec<usize> {
         if !self.search.enabled {
-            return (0..self.options.len()).collect();
+            return Self::truncate((0..self.options.len()).collect(), self.max_results);
         }
-        filter_options(&self.options, query, self.search.case_sensitive)
+        Self::truncate(
+            filter_options_with(&self.options, query, &self.search),
+            self.max_results,
+        )
+    }
+
+    pub(crate) fn truncate(mut v: Vec<usize>, max: Option<usize>) -> Vec<usize> {
+        if let Some(m) = max {
+            v.truncate(m);
+        }
+        v
+    }
+
+    /// Load `id -> count` history. Best-effort: errors yield an empty map.
+    pub(crate) fn load_history(path: &str) -> std::collections::HashMap<String, u64> {
+        let mut map = std::collections::HashMap::new();
+        let Ok(text) = std::fs::read_to_string(path) else {
+            return map;
+        };
+        for line in text.lines() {
+            let mut parts = line.rsplitn(2, ' ');
+            let (count, id) = match (parts.next(), parts.next()) {
+                (Some(c), Some(id)) => (c, id),
+                _ => continue,
+            };
+            if let Ok(n) = count.parse::<u64>() {
+                map.insert(id.to_string(), n);
+            }
+        }
+        map
+    }
+
+    /// Sort top-level options most-used-first (stable: ties keep order).
+    pub(crate) fn apply_history(&mut self) {
+        let Some(path) = self.history_file.clone() else {
+            return;
+        };
+        let counts = Self::load_history(&path);
+        if counts.is_empty() {
+            return;
+        }
+        self.options.sort_by(|a, b| {
+            let ca = counts.get(&a.id).copied().unwrap_or(0);
+            let cb = counts.get(&b.id).copied().unwrap_or(0);
+            cb.cmp(&ca)
+        });
+    }
+
+    pub(crate) fn record_history(&self, id: &str) {
+        let Some(path) = &self.history_file else {
+            return;
+        };
+        let mut counts = Self::load_history(path);
+        *counts.entry(id.to_string()).or_insert(0) += 1;
+        let mut rows: Vec<(&String, &u64)> = counts.iter().collect();
+        rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        let text = rows
+            .iter()
+            .map(|(id, n)| format!("{id} {n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let _ = std::fs::write(path, text);
     }
 
     /// Collect `(index-path, action, on_error)` for every option with an
     /// action, so [`Modal::run`] can fire the pick's action after the modal
     /// is gone (the modal itself is moved into the GUI closure).
-    fn collect_actions(&self) -> Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)> {
+    fn collect_actions(
+        &self,
+    ) -> Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)> {
         fn walk(
             prefix: &mut Vec<usize>,
             opts: &[ModalOption],
@@ -264,14 +414,16 @@ impl Modal {
     /// [`ModalOption::shell`], [`ModalOption::on_select`]), it fires here —
     /// once, on the calling thread, after the window closes. A failing
     /// spawn fires the option's [`ModalOption::on_error`] fallback instead.
-    pub fn run(self) -> Result<Option<ModalSelection>, String> {
+    pub fn run(self) -> Result<Option<ModalSelection>, ModalError> {
         if self.options.is_empty() {
-            return Err("quick-modals: no options provided".to_string());
+            return Err(ModalError::NoOptions);
         }
         // Actions are cloned out first: `self` moves into the GUI closure.
         let actions = self.collect_actions();
         let mut modal = self;
+        modal.apply_history();
         modal.theme = modal.resolved_theme()?;
+        let history_file = modal.history_file.clone();
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
         let inner = shared.clone();
         let title = modal.title.clone();
@@ -318,14 +470,38 @@ impl Modal {
         );
 
         if let Err(e) = res {
-            return Err(format!("quick-modals backend error: {e}"));
+            return Err(ModalError::Backend(e.to_string()));
         }
-        let picked: Option<ModalSelection> =
-            shared.lock().map(|g| g.clone()).unwrap_or(None);
+        let picked: Option<ModalSelection> = shared.lock().map(|g| g.clone()).unwrap_or(None);
         if let Some(ref sel) = picked {
+            if let Some(path) = &history_file {
+                // Best-effort persistence; failures are ignored.
+                let m = Modal::new("").history_file(path.clone());
+                m.record_history(&sel.id);
+            }
             Modal::dispatch_action(&actions, sel);
         }
         Ok(picked)
+    }
+
+    /// Multi-select variant: Space toggles rows, Enter confirms the set.
+    /// Returns every pick (empty = cancelled / nothing toggled).
+    /// Actions fire once per pick, in order, after the window closes.
+    pub fn run_multi(self) -> Result<Vec<ModalSelection>, ModalError> {
+        let multi = self.multi_select(true);
+        crate::multi::run_multi(multi)
+    }
+
+    /// Best-effort non-blocking variant: runs [`Modal::run`] on a spawned
+    /// thread and delivers the result to `callback`.
+    ///
+    /// Note: some platforms prefer GUI on the main thread; if the backend
+    /// fails the callback receives the [`ModalError`].
+    pub fn spawn(
+        self,
+        callback: impl FnOnce(Result<Option<ModalSelection>, ModalError>) + Send + 'static,
+    ) {
+        std::thread::spawn(move || callback(self.run()));
     }
 }
 
@@ -353,19 +529,14 @@ mod tests {
     fn collect_actions_walks_nested_paths() {
         let m = Modal::new("x")
             .option(ModalOption::new("a", "A").command("echo-a"))
-            .option(
-                ModalOption::new("p", "Parent").sub_options([
-                    ModalOption::new("b", "B"),
-                    ModalOption::new("c", "C").shell("echo-c"),
-                ]),
-            );
+            .option(ModalOption::new("p", "Parent").sub_options([
+                ModalOption::new("b", "B"),
+                ModalOption::new("c", "C").shell("echo-c"),
+            ]));
         let actions = m.collect_actions();
         assert_eq!(actions.len(), 2);
         assert_eq!(actions[0].0, vec![0]);
-        assert!(matches!(
-            actions[0].1,
-            crate::SelectAction::Command { .. }
-        ));
+        assert!(matches!(actions[0].1, crate::SelectAction::Command { .. }));
         assert_eq!(actions[1].0, vec![1, 1]);
         assert!(matches!(actions[1].1, crate::SelectAction::Shell(_)));
     }
@@ -379,6 +550,7 @@ mod tests {
             index: 0,
             path: vec![0],
             query: String::new(),
+            custom_input: false,
         };
         // No panic without a handler either.
         let bare = Modal::new("y")
@@ -423,6 +595,7 @@ mod tests {
             index: 0,
             path: vec![0],
             query: String::new(),
+            custom_input: false,
         };
         Modal::dispatch_action(&m.collect_actions(), &sel);
         assert!(!*fired.lock().unwrap());
@@ -467,5 +640,60 @@ mod tests {
             .stylesheet("modal { width: 10px; color }")
             .resolved_theme()
             .is_err());
+    }
+
+    #[test]
+    fn new_builder_defaults() {
+        let m = Modal::new("x");
+        assert!(m.default_selected.is_none());
+        assert!(!m.allow_custom_input);
+        assert!(!m.multi_select);
+        assert!(m.max_results.is_none());
+        assert!(m.footer_hint.is_none());
+        assert!(m.fonts.is_empty());
+        assert!(m.history_file.is_none());
+        assert!(!m.search.fuzzy);
+        assert_eq!(m.empty_message, "No matches");
+    }
+
+    #[test]
+    fn error_converts_to_string_for_legacy_mains() {
+        let e = crate::ModalError::NoOptions;
+        let s: String = e.into();
+        assert!(s.contains("no options"));
+        assert_eq!(
+            Modal::new("x").run().unwrap_err().to_string(),
+            "quick-modals: no options provided"
+        );
+    }
+
+    #[test]
+    fn max_results_truncates_filtered_indices() {
+        let m = Modal::new("x")
+            .options((0..10).map(|i| ModalOption::new(format!("id{i}"), format!("Item {i}"))))
+            .max_results(3);
+        assert_eq!(m.filtered_indices("Item").len(), 3);
+    }
+
+    #[test]
+    fn history_sorts_most_used_first() {
+        let dir = std::env::temp_dir().join(format!("qm-hist-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("hist.txt");
+        std::fs::write(&path, "b 5\na 1\n").unwrap();
+        let mut m = Modal::new("x")
+            .option(ModalOption::new("a", "A"))
+            .option(ModalOption::new("b", "B"))
+            .option(ModalOption::new("c", "C"))
+            .history_file(path.to_str().unwrap());
+        m.apply_history();
+        assert_eq!(m.options[0].id, "b");
+        assert_eq!(m.options[1].id, "a");
+        assert_eq!(m.options[2].id, "c");
+        m.record_history("c");
+        let counts = Modal::load_history(path.to_str().unwrap());
+        assert_eq!(counts.get("c"), Some(&1));
+        assert_eq!(counts.get("b"), Some(&5));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
