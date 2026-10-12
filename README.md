@@ -87,14 +87,11 @@ See `assets/theme.css` and `assets/themes/` for starting points.
 ## Examples
 
 ```sh
-cargo run --example basic
-cargo run --example fuzzy
-cargo run --example multi
-cargo run --example dialogs
-cargo run --example sub_options
-cargo run --example actions
-cargo run --example themed_icons
-cargo run --example css_themed
+cargo run --example basic    # minimal picker
+cargo run --example search   # filtering + picker extras (--fuzzy/--multi flags)
+cargo run --example menus    # submenus + actions (command/shell/closure)
+cargo run --example gallery  # icons + List/Grid layouts + CSS themes (--grid)
+cargo run --example dialogs  # Confirm + Prompt
 cargo run --bin quick-modals -- ~/Pictures/wallpapers
 ls ~/bin | cargo run --bin quick-modals -- --dmenu --prompt "Run:"
 ```

@@ -1,3 +1,9 @@
+//! Minimal picker: options + descriptions + blocking `run()`.
+//!
+//! Run with: `cargo run --example basic`
+//!
+//! Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel.
+
 use quick_modals::{Modal, ModalOption};
 
 fn main() -> Result<(), String> {
