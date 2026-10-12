@@ -330,7 +330,7 @@ impl ModalOption {
     /// Combine with [`ModalOption::arg`]/[`ModalOption::args`] for flags:
     ///
     /// ```no_run
-    /// use quick_modals::ModalOption;
+    /// use r_modals::ModalOption;
     /// let opt = ModalOption::new("ff", "Firefox").command("firefox").arg("--new-window");
     /// ```
     pub fn command(mut self, program: impl Into<String>) -> Self {
@@ -367,7 +367,7 @@ impl ModalOption {
     /// (`sh -c` on unix, `cmd /C` on Windows), spawned detached:
     ///
     /// ```no_run
-    /// use quick_modals::ModalOption;
+    /// use r_modals::ModalOption;
     /// let opt = ModalOption::new("up", "Update").shell("notify-send done && apt update");
     /// ```
     pub fn shell(mut self, cmdline: impl Into<String>) -> Self {
@@ -379,7 +379,7 @@ impl ModalOption {
     /// this option is picked (runs on the calling thread after `run()`):
     ///
     /// ```no_run
-    /// use quick_modals::ModalOption;
+    /// use r_modals::ModalOption;
     /// let opt = ModalOption::new("hi", "Hi").on_select(|sel| println!("picked {}", sel.id));
     /// ```
     pub fn on_select(mut self, f: impl Fn(&crate::ModalSelection) + Send + Sync + 'static) -> Self {
@@ -392,7 +392,7 @@ impl ModalOption {
     /// process actions — Rust callbacks cannot fail this way:
     ///
     /// ```no_run
-    /// use quick_modals::ModalOption;
+    /// use r_modals::ModalOption;
     /// let opt = ModalOption::new("term", "Terminal")
     ///     .command("ghost-terminal")
     ///     .on_error(|sel, err| println!("could not launch {}: {err}", sel.id));

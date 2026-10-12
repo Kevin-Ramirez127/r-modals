@@ -1,9 +1,9 @@
-//! `quick-modals` — instant modals for Rust.
+//! `r-modals` — instant modals for Rust.
 //!
 //! A tiny framework to pop a centered, searchable option picker:
 //!
 //! ```no_run
-//! use quick_modals::{Modal, ModalOption, Theme};
+//! use r_modals::{Modal, ModalOption, Theme};
 //!
 //! let choice = Modal::new("Launcher")
 //!     .placeholder("Type to filter…")

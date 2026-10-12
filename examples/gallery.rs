@@ -17,7 +17,7 @@
 //!   see `Theme::from_css` for the supported selectors/properties. A bad
 //!   stylesheet makes `run()` return `Err`.
 
-use quick_modals::{Layout, Modal, ModalOption, Theme};
+use r_modals::{Layout, Modal, ModalOption, Theme};
 
 /// Procedural 16x16 checkerboard icon (RGBA, no files needed).
 fn checkerboard() -> (usize, usize, Vec<u8>) {

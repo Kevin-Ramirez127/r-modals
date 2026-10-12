@@ -1,14 +1,14 @@
-use quick_modals::{Layout, Modal, ModalOption, Theme};
+use r_modals::{Layout, Modal, ModalOption, Theme};
 use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 
 fn print_help() {
     println!(
-        "quick-modals — instant option picker\n\
+        "r-modals — instant option picker\n\
          \n\
          MODES\n\
-         \x20  Image demo (default):  quick-modals [DIR]\n\
-         \x20  dmenu mode:            <stdin> | quick-modals --dmenu [OPTIONS]\n\
+         \x20  Image demo (default):  r-modals [DIR]\n\
+         \x20  dmenu mode:            <stdin> | r-modals --dmenu [OPTIONS]\n\
          \x20                         (stdin piped in also implies dmenu mode)\n\
          \n\
          DMENU OPTIONS\n\
@@ -31,9 +31,9 @@ fn print_help() {
          \x20  0 pick printed · 1 cancelled (no output) · 2 error\n\
          \n\
          EXAMPLES\n\
-         \x20  ls ~/bin | quick-modals --dmenu --prompt Run\n\
-         \x20  printf 'a\\nb\\nc' | quick-modals --dmenu --fuzzy --multi\n\
-         \x20  quick-modals ~/Pictures/wallpapers"
+         \x20  ls ~/bin | r-modals --dmenu --prompt Run\n\
+         \x20  printf 'a\\nb\\nc' | r-modals --dmenu --fuzzy --multi\n\
+         \x20  r-modals ~/Pictures/wallpapers"
     );
 }
 
@@ -99,7 +99,7 @@ fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>), String> 
 fn run_dmenu(opts: DmenuOpts) -> i32 {
     let mut input = String::new();
     if io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("quick-modals: cannot read stdin");
+        eprintln!("r-modals: cannot read stdin");
         return 2;
     }
     let lines: Vec<String> = input
@@ -108,13 +108,13 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
         .filter(|l| !l.is_empty())
         .collect();
     if lines.is_empty() {
-        eprintln!("quick-modals: no options on stdin");
+        eprintln!("r-modals: no options on stdin");
         return 2;
     }
     let (theme, stylesheet) = match resolve_theme(opts.theme.as_deref()) {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("quick-modals: {e}");
+            eprintln!("r-modals: {e}");
             return 2;
         }
     };
@@ -161,7 +161,7 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
                 0
             }
             Err(e) => {
-                eprintln!("quick-modals: {e}");
+                eprintln!("r-modals: {e}");
                 2
             }
         }
@@ -177,7 +177,7 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
             }
             Ok(None) => 1,
             Err(e) => {
-                eprintln!("quick-modals: {e}");
+                eprintln!("r-modals: {e}");
                 2
             }
         }
@@ -245,7 +245,7 @@ fn main() {
         return;
     }
     if args.iter().any(|a| a == "-V" || a == "--version") {
-        println!("quick-modals {}", env!("CARGO_PKG_VERSION"));
+        println!("r-modals {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     let stdin_piped = !io::stdin().is_terminal();
@@ -287,7 +287,7 @@ fn main() {
         i += 1;
     }
     if let Some(e) = bad {
-        eprintln!("quick-modals: {e}");
+        eprintln!("r-modals: {e}");
         std::process::exit(2);
     }
     if dmenu {
@@ -295,7 +295,7 @@ fn main() {
     }
     let dir = dir.unwrap_or_else(|| "assets".to_string());
     if let Err(e) = run_image_demo(&dir) {
-        eprintln!("quick-modals: {e}");
+        eprintln!("r-modals: {e}");
         std::process::exit(2);
     }
 }

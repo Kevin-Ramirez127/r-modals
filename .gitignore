@@ -7,7 +7,7 @@
 /target/
 
 # Cargo.lock is tracked for binaries/executables (this repo ships the
-# `quick-modals` binary), so it is intentionally NOT ignored here. Only
+# `r-modals` binary), so it is intentionally NOT ignored here. Only
 # ignore it for pure libraries.
 # See https://doc.rust-lang.org/cargo/guide/cargo-toml-vs-cargo-lock.html
 

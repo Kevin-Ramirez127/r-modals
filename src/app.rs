@@ -90,7 +90,7 @@ impl ModalApp {
             cursor: 0,
             textures: HashMap::new(),
             result,
-            search_id: egui::Id::new("quick-modals-search"),
+            search_id: egui::Id::new("r-modals-search"),
             focused_once: false,
             scroll_to_cursor: false,
             last_scroll_offset: egui::Vec2::ZERO,
@@ -661,7 +661,7 @@ impl ModalApp {
                 // Center the whole grid block in the modal: a bare Grid
                 // left-aligns, leaving the slack on the right.
                 ui.with_layout(egui::Layout::top_down(egui::Align::Center), |ui| {
-                    egui::Grid::new("quick-modals-tiles")
+                    egui::Grid::new("r-modals-tiles")
                         .num_columns(cols)
                         .spacing([t.item_spacing, t.item_spacing])
                         .show(ui, |ui| {

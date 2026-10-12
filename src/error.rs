@@ -14,9 +14,9 @@ pub enum ModalError {
 impl std::fmt::Display for ModalError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ModalError::NoOptions => write!(f, "quick-modals: no options provided"),
-            ModalError::Css(e) => write!(f, "quick-modals CSS error: {e}"),
-            ModalError::Backend(e) => write!(f, "quick-modals backend error: {e}"),
+            ModalError::NoOptions => write!(f, "r-modals: no options provided"),
+            ModalError::Css(e) => write!(f, "r-modals CSS error: {e}"),
+            ModalError::Backend(e) => write!(f, "r-modals backend error: {e}"),
         }
     }
 }

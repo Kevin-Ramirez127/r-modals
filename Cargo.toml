@@ -1,5 +1,5 @@
 [package]
-name = "quick-modals"
+name = "r-modals"
 version = "0.2.0"
 edition = "2021"
 description = "Instant modals for Rust — searchable option picker with icons and themes"
@@ -19,8 +19,8 @@ lightningcss = "1.0.0-alpha.72"
 [dev-dependencies]
 
 [[bin]]
-name = "quick-modals"
-path = "src/bin/quick-modals.rs"
+name = "r-modals"
+path = "src/bin/r-modals.rs"
 
 [features]
 default = []

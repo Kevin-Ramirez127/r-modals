@@ -173,7 +173,7 @@ impl Theme {
     /// supported selectors and properties). Starts from the dark defaults.
     ///
     /// ```no_run
-    /// use quick_modals::Theme;
+    /// use r_modals::Theme;
     /// let theme = Theme::from_css("modal { background: #18181c; border-radius: 12px; }").unwrap();
     /// ```
     pub fn from_css(css: &str) -> Result<Self, String> {

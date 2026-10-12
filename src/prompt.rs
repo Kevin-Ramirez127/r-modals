@@ -5,7 +5,7 @@ use crate::{ModalError, Theme};
 /// Text input dialog.
 ///
 /// ```no_run
-/// use quick_modals::Prompt;
+/// use r_modals::Prompt;
 /// let name = Prompt::new("Your name?").placeholder("Jane").run().unwrap();
 /// ```
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ impl Prompt {
             password: false,
             confirm_label: "OK".to_string(),
             theme: Theme::default(),
-            app_id: "quick-modals".to_string(),
+            app_id: "r-modals".to_string(),
         }
     }
 
@@ -181,7 +181,7 @@ impl Prompt {
                     confirm_label,
                     theme,
                     focused: false,
-                    id: egui::Id::new("quick-modals-prompt"),
+                    id: egui::Id::new("r-modals-prompt"),
                 }) as Box<dyn eframe::App>)
             }),
         );

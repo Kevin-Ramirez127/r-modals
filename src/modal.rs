@@ -24,7 +24,7 @@ pub struct ModalSelection {
 /// Builder for an instant modal.
 ///
 /// ```no_run
-/// use quick_modals::{Modal, ModalOption};
+/// use r_modals::{Modal, ModalOption};
 /// let sel = Modal::new("Pick one")
 ///     .option(ModalOption::new("a", "Alpha"))
 ///     .option(ModalOption::new("b", "Beta"))
@@ -72,7 +72,7 @@ impl Modal {
             stylesheet_override: None,
             position: Position::Center,
             initial_query: String::new(),
-            app_id: "quick-modals".to_string(),
+            app_id: "r-modals".to_string(),
             default_selected: None,
             allow_custom_input: false,
             empty_message: "No matches".to_string(),
@@ -169,7 +169,7 @@ impl Modal {
     /// stylesheet makes [`Modal::run`] return `Err`.
     ///
     /// ```no_run
-    /// use quick_modals::Modal;
+    /// use r_modals::Modal;
     /// let sel = Modal::new("Pick one")
     ///     .stylesheet("modal { background: #18181c; }")
     ///     .run();
@@ -187,7 +187,7 @@ impl Modal {
     /// inline:
     ///
     /// ```no_run
-    /// use quick_modals::Modal;
+    /// use r_modals::Modal;
     /// let sel = Modal::new("Pick one")
     ///     .stylesheet("modal { background: #18181c; }")
     ///     .stylesheet_override("search { background: #222228; }")
@@ -221,10 +221,10 @@ impl Modal {
 
     /// Wayland app_id (and X11 class hint) for the window.
     ///
-    /// Defaults to `"quick-modals"`. Tiling compositors ignore requested
+    /// Defaults to `"r-modals"`. Tiling compositors ignore requested
     /// window sizes unless the window floats — target this id in your
     /// compositor config, e.g. sway:
-    /// `for_window [app_id="quick-modals"] floating enable`.
+    /// `for_window [app_id="r-modals"] floating enable`.
     pub fn app_id(mut self, id: impl Into<String>) -> Self {
         self.app_id = id.into();
         self
@@ -663,7 +663,7 @@ mod tests {
         assert!(s.contains("no options"));
         assert_eq!(
             Modal::new("x").run().unwrap_err().to_string(),
-            "quick-modals: no options provided"
+            "r-modals: no options provided"
         );
     }
 

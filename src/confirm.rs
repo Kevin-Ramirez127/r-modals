@@ -5,7 +5,7 @@ use crate::{ModalError, Theme};
 /// One-shot confirmation dialog.
 ///
 /// ```no_run
-/// use quick_modals::Confirm;
+/// use r_modals::Confirm;
 /// let ok = Confirm::new("Delete file?").message("This cannot be undone.").run().unwrap();
 /// ```
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ impl Confirm {
             confirm_label: "Confirm".to_string(),
             cancel_label: "Cancel".to_string(),
             theme: Theme::default(),
-            app_id: "quick-modals".to_string(),
+            app_id: "r-modals".to_string(),
         }
     }
 

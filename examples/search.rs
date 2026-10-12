@@ -18,7 +18,7 @@
 //! typed text with `custom_input == true`), and `history_file` (pick counts
 //! persist, most-used sorts first).
 
-use quick_modals::{Modal, ModalOption};
+use r_modals::{Modal, ModalOption};
 
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
@@ -27,7 +27,7 @@ fn main() -> Result<(), String> {
     let case_sensitive = args.iter().any(|a| a == "--case-sensitive");
 
     let history = std::env::temp_dir()
-        .join("quick-modals-search-history.txt")
+        .join("r-modals-search-history.txt")
         .to_string_lossy()
         .into_owned();
 

@@ -9,7 +9,7 @@
 //!   close. Button texts come from `confirm_label`/`cancel_label`.
 //! - Both take `theme(..)` and `app_id(..)` like `Modal`.
 
-use quick_modals::{Confirm, Prompt};
+use r_modals::{Confirm, Prompt};
 
 fn main() -> Result<(), String> {
     let name = Prompt::new("Your name?")

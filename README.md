@@ -14,27 +14,27 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`
 - **Layouts** — `List` rows or `Grid` image tiles
 - **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`, `Theme::auto()`
-- **dmenu mode** — pipe stdin to `quick-modals --dmenu`, pick goes to stdout (exit 0 pick · 1 cancel · 2 error)
+- **dmenu mode** — pipe stdin to `r-modals --dmenu`, pick goes to stdout (exit 0 pick · 1 cancel · 2 error)
 
 ## Install
 
 build from source:
 
 ```sh
-cargo install --git https://github.com/Kevin-Ramirez127/r-modals quick-modals
+cargo install --git https://github.com/Kevin-Ramirez127/r-modals r-modals
 ```
 
 To use it as a library, add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-quick-modals = { git = "https://github.com/Kevin-Ramirez127/r-modals" }
+r-modals = { git = "https://github.com/Kevin-Ramirez127/r-modals" }
 ```
 
 ## Usage
 
 ```rust
-use quick_modals::{Modal, ModalOption};
+use r_modals::{Modal, ModalOption};
 
 let choice = Modal::new("Launcher")
     .option(ModalOption::new("ff", "Firefox").description("Web browser"))
@@ -53,7 +53,7 @@ Extras: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P` move; `Ctrl+U` clears the
 ## Dialogs
 
 ```rust
-use quick_modals::{Confirm, Prompt};
+use r_modals::{Confirm, Prompt};
 
 let name = Prompt::new("Your name?").placeholder("Jane").run().unwrap();
 let ok = Confirm::new("Greet?").message("Say hello?").run().unwrap();
@@ -62,9 +62,9 @@ let ok = Confirm::new("Greet?").message("Say hello?").run().unwrap();
 ## dmenu mode
 
 ```sh
-ls ~/bin | quick-modals --dmenu --prompt "Run:" --fuzzy
-printf 'a\nb\nc' | quick-modals --dmenu --multi
-quick-modals --help
+ls ~/bin | r-modals --dmenu --prompt "Run:" --fuzzy
+printf 'a\nb\nc' | r-modals --dmenu --multi
+r-modals --help
 ```
 
 ## Theming
@@ -92,13 +92,13 @@ cargo run --example search   # filtering + picker extras (--fuzzy/--multi flags)
 cargo run --example menus    # submenus + actions (command/shell/closure)
 cargo run --example gallery  # icons + List/Grid layouts + CSS themes (--grid)
 cargo run --example dialogs  # Confirm + Prompt
-cargo run --bin quick-modals -- ~/Pictures/wallpapers
-ls ~/bin | cargo run --bin quick-modals -- --dmenu --prompt "Run:"
+cargo run --bin r-modals -- ~/Pictures/wallpapers
+ls ~/bin | cargo run --bin r-modals -- --dmenu --prompt "Run:"
 ```
 
 ## Notes
 
-- On tiling compositors (sway/Hyprland), float the window via the `quick-modals` app id, e.g. `for_window [app_id="quick-modals"] floating enable`.
+- On tiling compositors (sway/Hyprland), float the window via the `r-modals` app id, e.g. `for_window [app_id="r-modals"] floating enable`.
 
 ## License
 

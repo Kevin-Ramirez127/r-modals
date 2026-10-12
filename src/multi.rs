@@ -253,7 +253,7 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                 cursor: 0,
                 picked: HashSet::new(),
                 result: inner,
-                search_id: egui::Id::new("quick-modals-multi"),
+                search_id: egui::Id::new("r-modals-multi"),
                 focused: false,
             }) as Box<dyn eframe::App>)
         }),

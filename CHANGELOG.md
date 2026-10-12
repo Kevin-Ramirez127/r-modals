@@ -16,7 +16,7 @@
 - `Prompt::new(...).placeholder(...).password(...).run() -> Option<String>`
 - `Modal::run_multi()` / `multi::run_multi` — Space-toggle multi-select
 
-### CLI (`quick-modals --dmenu`)
+### CLI (`r-modals --dmenu`)
 - stdin-lines → picker → stdout, `--prompt/--layout/--theme/--multi/--fuzzy/`
   `--case-sensitive/--allow-custom/--history-file/--empty-message/`
   `--max-results/--print-id`; exit codes 0 pick · 1 cancel · 2 error

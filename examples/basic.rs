@@ -4,7 +4,7 @@
 //!
 //! Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel.
 
-use quick_modals::{Modal, ModalOption};
+use r_modals::{Modal, ModalOption};
 
 fn main() -> Result<(), String> {
     let choice = Modal::new("Launcher")
