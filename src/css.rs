@@ -4,28 +4,29 @@
 //!
 //! - `modal` — the window: `width`, `height`, `background`/`background-color`,
 //!   `color`, `border-radius`, `padding`, `margin`, `font-size`,
-//!   `border`/`border-width`/`border-color`, `gap`, `accent-color`
+//!   `gap`, `accent-color`
 //! - `tile` — option rows/tiles: `background`/`background-color`,
 //!   `border-radius`, `width`/`height` (must match: tiles are square)
 //! - `tile icon` — the icon inside list rows: `width`/`height` (must match)
 //! - `tile[selected]` — the selected row/tile: `background`/`background-color`
 //! - `tile description` — secondary text: `color`, `display: none` (hides it)
 //! - `search` — the search field: `background`/`background-color`, `color`
-//!   (typed text), `font-size`, `border-radius`,
-//!   `border`/`border-width`/`border-color`
+//!   (typed text), `font-size`, `border-radius`
 //! - `search hint` — the placeholder text: `color`
+//!
+//! Modals are always borderless: `border`/`border-width`/`border-color` are
+//! rejected. (`border-radius` still rounds corners.)
 //!
 //! Only `px` lengths are supported (`0` counts as `0px`). Anything else —
 //! `em`, `%`, `auto` where a length is required — is an error, except
 //! `width`/`height`/`accent-color`, where `auto` keeps the current value.
-//! Rect shorthands (`padding`, `margin`, `border-width`, `border-color`,
+//! Rect shorthands (`padding`, `margin`,
 //! `border-radius`) must be uniform: write a single value. Later rules win
 //! (no specificity, `!important` always wins).
 
 use crate::Theme;
 use lightningcss::{
     properties::{
-        border::LineStyle,
         display::{Display, DisplayKeyword},
         ui::ColorOrAuto,
         Property,
@@ -171,22 +172,6 @@ fn rect_px(
     )
 }
 
-fn border_side_width(
-    w: &lightningcss::properties::border::BorderSideWidth,
-    what: &str,
-) -> Result<f32, String> {
-    use lightningcss::properties::border::BorderSideWidth;
-    use lightningcss::values::length::Length;
-    match w {
-        BorderSideWidth::Length(Length::Value(LengthValue::Px(v))) => Ok(*v),
-        // CSS spec keywords.
-        BorderSideWidth::Thin => Ok(1.0),
-        BorderSideWidth::Medium => Ok(3.0),
-        BorderSideWidth::Thick => Ok(5.0),
-        _ => Err(format!("{what}: only px border widths are supported")),
-    }
-}
-
 /// `gap` fields are private, so read the row value back from its text.
 fn gap_px(gap: &lightningcss::properties::align::Gap, what: &str) -> Result<f32, String> {
     let text = gap
@@ -237,27 +222,6 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
             }
             Property::FontSize(s) => {
                 theme.font_size = font_px(s, "modal font-size")?;
-            }
-            Property::Border(b) => {
-                if matches!(b.style, LineStyle::None) {
-                    theme.border_width = 0.0;
-                } else {
-                    theme.border_width = border_side_width(&b.width, "modal border")?;
-                    theme.border = color(&b.color, "modal border")?;
-                }
-            }
-            Property::BorderWidth(w) => {
-                theme.border_width = uniform(
-                    border_side_width(&w.top, "modal border-width")?,
-                    border_side_width(&w.right, "modal border-width")?,
-                    border_side_width(&w.bottom, "modal border-width")?,
-                    border_side_width(&w.left, "modal border-width")?,
-                    "modal border-width",
-                )?;
-            }
-            Property::BorderColor(c) => {
-                theme.border =
-                    uniform_color(&c.top, &c.right, &c.bottom, &c.left, "modal border-color")?;
             }
             Property::Gap(g) => theme.item_spacing = gap_px(g, "modal gap")?,
             Property::RowGap(v) | Property::ColumnGap(v) => {
@@ -332,27 +296,6 @@ fn apply_declaration(theme: &mut Theme, target: Target, prop: &Property) -> Resu
             }
             Property::BorderRadius(r, _) => {
                 theme.search_radius = Some(uniform_radius(r, "search border-radius")?);
-            }
-            Property::Border(b) => {
-                if matches!(b.style, LineStyle::None) {
-                    theme.search_border_width = 0.0;
-                } else {
-                    theme.search_border_width = border_side_width(&b.width, "search border")?;
-                    theme.search_border = color(&b.color, "search border")?;
-                }
-            }
-            Property::BorderWidth(w) => {
-                theme.search_border_width = uniform(
-                    border_side_width(&w.top, "search border-width")?,
-                    border_side_width(&w.right, "search border-width")?,
-                    border_side_width(&w.bottom, "search border-width")?,
-                    border_side_width(&w.left, "search border-width")?,
-                    "search border-width",
-                )?;
-            }
-            Property::BorderColor(c) => {
-                theme.search_border =
-                    uniform_color(&c.top, &c.right, &c.bottom, &c.left, "search border-color")?;
             }
             _ => return Err(unsupported(target, prop)),
         },
@@ -460,28 +403,6 @@ fn gap_value_px(v: &lightningcss::properties::align::GapValue, what: &str) -> Re
     }
 }
 
-fn uniform_color(
-    top: &CssColor,
-    right: &CssColor,
-    bottom: &CssColor,
-    left: &CssColor,
-    what: &str,
-) -> Result<egui::Color32, String> {
-    let (t, r, b, l) = (
-        color(top, what)?,
-        color(right, what)?,
-        color(bottom, what)?,
-        color(left, what)?,
-    );
-    if t == r && t == b && t == l {
-        Ok(t)
-    } else {
-        Err(format!(
-            "{what}: only uniform values are supported, write a single value"
-        ))
-    }
-}
-
 fn uniform_radius(
     r: &lightningcss::properties::border_radius::BorderRadius,
     what: &str,
@@ -528,7 +449,7 @@ mod tests {
                 width: 600px; height: 400px;
                 background: #18181c; color: rgb(235, 235, 240);
                 border-radius: 16px; padding: 10px; margin: 6px;
-                font-size: 14px; border: 2px solid #111111; gap: 6px;
+                font-size: 14px; gap: 6px;
                 accent-color: #6490dc;
             }"#,
         );
@@ -540,8 +461,6 @@ mod tests {
         assert_eq!(t.padding, 10.0);
         assert_eq!(t.margin, 6.0);
         assert_eq!(t.font_size, 14.0);
-        assert_eq!(t.border_width, 2.0);
-        assert_eq!(t.border, egui::Color32::from_rgb(17, 17, 17));
         assert_eq!(t.item_spacing, 6.0);
         assert_eq!(t.accent, egui::Color32::from_rgb(100, 144, 220));
     }
@@ -577,7 +496,7 @@ mod tests {
             r#"
             search {
                 background: #222228; color: #f0f0f5; font-size: 18px;
-                border-radius: 8px; border: 2px solid #111111;
+                border-radius: 8px;
             }
             search hint { color: #888895; }
             "#,
@@ -588,8 +507,6 @@ mod tests {
         assert_eq!(t.effective_search_font_size(), 18.0);
         assert_eq!(t.search_radius, Some(8.0));
         assert_eq!(t.effective_search_radius(), 8.0);
-        assert_eq!(t.search_border_width, 2.0);
-        assert_eq!(t.search_border, egui::Color32::from_rgb(17, 17, 17));
         assert_eq!(t.search_hint, egui::Color32::from_rgb(136, 136, 149));
     }
 
@@ -603,9 +520,18 @@ mod tests {
     }
 
     #[test]
-    fn search_border_none_means_no_border() {
-        let t = themed("search { border: none; }");
-        assert_eq!(t.search_border_width, 0.0);
+    fn borders_are_rejected_always_borderless() {
+        for bad in [
+            "modal { border: none; }",
+            "modal { border: 1px solid red; }",
+            "modal { border-width: thin; }",
+            "modal { border-color: red; }",
+            "search { border: none; }",
+            "search { border-width: 1px; }",
+            "search { border-color: red; }",
+        ] {
+            assert!(Theme::from_css(bad).is_err(), "expected error for {bad:?}");
+        }
     }
 
     #[test]
@@ -637,19 +563,6 @@ mod tests {
     fn important_beats_later_normal_rule() {
         let t = themed("modal { color: red !important; } modal { color: blue; }");
         assert_eq!(t.text, egui::Color32::from_rgb(255, 0, 0));
-    }
-
-    #[test]
-    fn border_none_means_no_border() {
-        let t = themed("modal { border: none; }");
-        assert_eq!(t.border_width, 0.0);
-    }
-
-    #[test]
-    fn border_thin_keyword() {
-        let t = themed("modal { border-width: thin; border-color: red; }");
-        assert_eq!(t.border_width, 1.0);
-        assert_eq!(t.border, egui::Color32::from_rgb(255, 0, 0));
     }
 
     #[test]

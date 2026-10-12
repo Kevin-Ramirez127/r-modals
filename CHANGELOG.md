@@ -22,6 +22,13 @@
   `--max-results/--print-id`; exit codes 0 pick · 1 cancel · 2 error
 
 ### API / robustness
+- Modals are always borderless: `Theme::border`/`border_width` and
+  `search_border`/`search_border_width` are removed, and
+  `border`/`border-width`/`border-color` CSS is rejected
+  (`border-radius` still rounds corners)
+- Transparent framebuffer clear in all windows: overrides eframe's default
+  `(12,12,12,180)` clear, which left a dark veil across the transparent
+  margin ring and rounded corners
 - Typed `ModalError::{NoOptions, Css, Backend}` (`Display + Error`;
   `From<ModalError> for String` keeps legacy `?` working)
 - `Modal::spawn(callback)` non-blocking variant

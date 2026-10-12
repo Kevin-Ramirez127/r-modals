@@ -78,6 +78,11 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                 focused: bool,
             }
             impl eframe::App for MultiApp {
+                // See ModalApp::clear_color: keep the margin ring transparent.
+                fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+                    [0.0, 0.0, 0.0, 0.0]
+                }
+
                 fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
                     let t = self.modal.theme.clone();
                     let (esc, down, up, enter, space) = ctx.input_mut(|i| {
@@ -157,7 +162,6 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                     let frame = egui::Frame::new()
                         .fill(t.background)
                         .corner_radius(t.corner_radius)
-                        .stroke(egui::Stroke::new(t.border_width, t.border))
                         .inner_margin(t.padding)
                         .outer_margin(t.margin);
                     egui::CentralPanel::default().frame(frame).show(ctx, |ui| {

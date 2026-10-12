@@ -671,15 +671,9 @@ impl ModalApp {
                                 let tile_resp = egui::Frame::new()
                                     .fill(if selected { t.selected } else { t.surface })
                                     .corner_radius(tile_radius)
-                                    // NOTE: selected and unselected tiles must
-                                    // share the same stroke width (only the color
-                                    // differs). A thicker selected border would
-                                    // change the tile's outer size and shift the
-                                    // neighboring tiles in the grid.
-                                    .stroke(egui::Stroke::new(
-                                        t.border_width,
-                                        if selected { t.accent } else { t.border },
-                                    ))
+                                    // NOTE: selection is fill-only (modals are
+                                    // always borderless): the selected tile
+                                    // reads via its `selected` background.
                                     .inner_margin(4.0)
                                     .show(ui, |ui| {
                                         // Fixed tile footprint with the image
@@ -1533,6 +1527,12 @@ mod tests {
 }
 
 impl eframe::App for ModalApp {
+    // Fully transparent clear: eframe's default (12,12,12,180) would leave
+    // a dark veil across the transparent margin ring and rounded corners.
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let t = self.modal.theme.clone();
 
@@ -1719,10 +1719,10 @@ impl eframe::App for ModalApp {
         // each locking `ctx.input` themselves (O(n) locks per frame).
         let hover_fresh = ctx.input(|i| i.pointer.hover_pos()) != self.last_hover_pos;
 
+        // Borderless: no stroke on the modal frame.
         let frame = egui::Frame::new()
             .fill(t.background)
             .corner_radius(t.corner_radius)
-            .stroke(egui::Stroke::new(t.border_width, t.border))
             .inner_margin(t.padding)
             .outer_margin(t.margin);
 
@@ -1748,7 +1748,7 @@ impl eframe::App for ModalApp {
                 });
                 ui.add_space(4.0);
             }
-            // Search field, wrapped in a themed frame (background, border,
+            // Search field, wrapped in a themed frame (background,
             // radius). The TextEdit itself is frameless so the frame is the
             // only box drawn.
             if self.modal.search.enabled {
@@ -1756,7 +1756,6 @@ impl eframe::App for ModalApp {
                 let resp = egui::Frame::new()
                     .fill(t.search_background)
                     .corner_radius(t.effective_search_radius())
-                    .stroke(egui::Stroke::new(t.search_border_width, t.search_border))
                     .inner_margin(egui::Margin::symmetric(10, 7))
                     .show(ui, |ui| {
                         ui.add(

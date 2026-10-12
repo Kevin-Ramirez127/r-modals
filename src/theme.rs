@@ -59,9 +59,6 @@ pub struct Theme {
     pub text: Color32,
     pub dim_text: Color32,
     pub accent: Color32,
-    pub border: Color32,
-    /// Border width (0 = none).
-    pub border_width: f32,
     /// Search field font size.
     pub font_size: f32,
     /// Search field background fill.
@@ -70,10 +67,6 @@ pub struct Theme {
     pub search_text: Color32,
     /// Search field placeholder (hint) text color.
     pub search_hint: Color32,
-    /// Search field border color.
-    pub search_border: Color32,
-    /// Search field border width (0 = none).
-    pub search_border_width: f32,
     /// Search field corner radius. `None` (default) derives 60% of
     /// `corner_radius`, so it follows the modal shape automatically.
     pub search_radius: Option<f32>,
@@ -109,14 +102,10 @@ impl Theme {
             text: Color32::from_rgb(235, 235, 240),
             dim_text: Color32::from_rgb(150, 150, 165),
             accent: Color32::from_rgb(100, 160, 255),
-            border: Color32::from_rgb(60, 60, 72),
-            border_width: 1.0,
             font_size: 15.0,
             search_background: Color32::from_rgb(34, 34, 40),
             search_text: Color32::from_rgb(235, 235, 240),
             search_hint: Color32::from_rgb(150, 150, 165),
-            search_border: Color32::from_rgb(60, 60, 72),
-            search_border_width: 1.0,
             search_radius: None,
             search_font_size: None,
             show_descriptions: true,
@@ -258,8 +247,6 @@ mod tests {
         assert_eq!(dark.search_background, Color32::from_rgb(34, 34, 40));
         assert_eq!(dark.search_text, Color32::from_rgb(235, 235, 240));
         assert_eq!(dark.search_hint, Color32::from_rgb(150, 150, 165));
-        assert_eq!(dark.search_border, Color32::from_rgb(60, 60, 72));
-        assert_eq!(dark.search_border_width, 1.0);
         assert_eq!(dark.search_radius, None);
         assert_eq!(dark.search_font_size, None);
 
@@ -270,8 +257,6 @@ mod tests {
         assert_eq!(light.text, Color32::from_rgb(20, 20, 25));
         assert_eq!(light.dim_text, Color32::from_rgb(110, 110, 125));
         assert_eq!(light.accent, Color32::from_rgb(40, 90, 220));
-        assert_eq!(light.border, Color32::from_rgb(210, 210, 220));
-        assert_eq!(light.border_width, 1.0);
         assert_eq!(light.width, 560.0);
         assert_eq!(light.height, 380.0);
         assert_eq!(light.corner_radius, 12.0);
@@ -282,8 +267,6 @@ mod tests {
         assert_eq!(light.search_background, Color32::WHITE);
         assert_eq!(light.search_text, Color32::from_rgb(20, 20, 25));
         assert_eq!(light.search_hint, Color32::from_rgb(110, 110, 125));
-        assert_eq!(light.search_border, Color32::from_rgb(210, 210, 220));
-        assert_eq!(light.search_border_width, 1.0);
         assert_eq!(light.search_radius, None);
         assert_eq!(light.search_font_size, None);
         assert_eq!(light.icon_size, 28.0);
@@ -317,8 +300,6 @@ mod tests {
         assert_eq!(t.text, Theme::dark().text);
         assert_eq!(t.dim_text, Theme::dark().dim_text);
         assert_eq!(t.accent, Theme::dark().accent);
-        assert_eq!(t.border, Theme::dark().border);
-        assert_eq!(t.border_width, Theme::dark().border_width);
         assert_eq!(t.width, Theme::dark().width);
         assert_eq!(t.height, Theme::dark().height);
         assert_eq!(t.corner_radius, Theme::dark().corner_radius);
@@ -329,8 +310,6 @@ mod tests {
         assert_eq!(t.search_background, Theme::dark().search_background);
         assert_eq!(t.search_text, Theme::dark().search_text);
         assert_eq!(t.search_hint, Theme::dark().search_hint);
-        assert_eq!(t.search_border, Theme::dark().search_border);
-        assert_eq!(t.search_border_width, Theme::dark().search_border_width);
         assert_eq!(t.search_radius, Theme::dark().search_radius);
         assert_eq!(t.search_font_size, Theme::dark().search_font_size);
         assert_eq!(t.icon_size, Theme::dark().icon_size);

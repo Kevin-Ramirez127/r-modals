@@ -119,6 +119,9 @@ impl Prompt {
                     id: egui::Id,
                 }
                 impl eframe::App for App {
+                    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+                        [0.0, 0.0, 0.0, 0.0]
+                    }
                     fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
                         let esc = ctx
                             .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
@@ -134,10 +137,6 @@ impl Prompt {
                         let frame = egui::Frame::new()
                             .fill(self.theme.background)
                             .corner_radius(self.theme.corner_radius)
-                            .stroke(egui::Stroke::new(
-                                self.theme.border_width,
-                                self.theme.border,
-                            ))
                             .inner_margin(self.theme.padding)
                             .outer_margin(self.theme.margin);
                         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {

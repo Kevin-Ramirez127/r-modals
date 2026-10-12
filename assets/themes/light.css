@@ -10,7 +10,6 @@ modal {
   padding: 12px;
   margin: 8px;
   font-size: 15px;
-  border: 1px solid #d2d2dc;
   gap: 4px;
   accent-color: #285adc;
 }
@@ -37,7 +36,6 @@ tile description {
 search {
   background: #ffffff;
   color: #141419;
-  border: 1px solid #d2d2dc;
 }
 
 search hint {
