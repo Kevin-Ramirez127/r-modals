@@ -62,10 +62,7 @@ fn main() -> Result<(), String> {
         .run()?;
 
     match choice {
-        Some(sel) => println!(
-            "picked {} ({}) at path {:?}",
-            sel.label, sel.id, sel.path
-        ),
+        Some(sel) => println!("picked {} ({}) at path {:?}", sel.label, sel.id, sel.path),
         None => println!("cancelled"),
     }
     Ok(())
