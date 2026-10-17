@@ -22,7 +22,7 @@
   `~/.config/r-modals/shortcuts.toml`) when present; disable with
   `Modal::auto_shortcuts(false)`
 - `ShortcutSpec`, `parse_shortcuts`, `load_shortcuts_file`, `default_shortcuts_path`;
-  `ModalError::Shortcuts` for parse/validation failures; reference in `assets/shortcuts.toml`
+  `ModalError::Shortcuts` for parse/validation failures; reference in `examples/assets/shortcuts.toml`
 - CLI: `r-modals --dmenu --shortcuts FILE` / `--no-shortcuts`
 
 ### New modal types

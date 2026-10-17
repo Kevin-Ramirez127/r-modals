@@ -6,7 +6,7 @@
 //! cargo run --example gallery -- --grid   # image tiles instead of list rows
 //! ```
 //!
-//! - Icons, all three sources: file path (`assets/firefox.png`), embedded
+//! - Icons, all three sources: file path (`examples/assets/firefox.png`), embedded
 //!   bytes (`include_bytes!`), and raw RGBA pixels (`icon_pixels`).
 //!   Missing/undecodable images fall back to no icon (never crashes).
 //! - Layout: `List` rows (thumbnail + text) or `Grid` image tiles (the tile
@@ -44,17 +44,17 @@ fn main() -> Result<(), String> {
         .placeholder("Search apps…")
         .layout(if grid { Layout::Grid } else { Layout::List })
         .theme(Theme::transparent_dark())
-        .stylesheet(include_str!("../assets/theme.css"))
+        .stylesheet(include_str!("assets/theme.css"))
         .stylesheet_override("modal { width: 600px; }")
         .option(
             ModalOption::new("ff", "Firefox")
                 .description("Web browser — file icon")
-                .icon("assets/firefox.png"),
+                .icon("examples/assets/firefox.png"),
         )
         .option(
             ModalOption::new("term", "Terminal")
                 .description("Alacritty — embedded bytes")
-                .icon(include_bytes!("../assets/terminal.png").to_vec()),
+                .icon(include_bytes!("assets/terminal.png").to_vec()),
         )
         .option(
             ModalOption::new("edit", "Editor")

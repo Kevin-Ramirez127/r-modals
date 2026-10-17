@@ -52,14 +52,41 @@ fn is_image_file(p: &std::path::Path) -> bool {
     )
 }
 
-/// Solid-color RGBA square (no files needed).
-fn solid_icon(size: usize, rgb: [u8; 3]) -> (usize, usize, Vec<u8>) {
-    let mut rgba = Vec::with_capacity(size * size * 4);
-    for _ in 0..size * size {
-        rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+/// Render monospace ASCII art into an RGBA icon: one character per cell, each
+/// expanded `scale`×`scale`, so the binary carries no image files. Non-space
+/// characters are drawn in `fg`, spaces in `bg`.
+fn ascii_icon(art: &[&str], fg: [u8; 3], bg: [u8; 3], scale: usize) -> (usize, usize, Vec<u8>) {
+    let scale = scale.max(1);
+    let rows = art.len().max(1);
+    let cols = art
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let (w, h) = (cols * scale, rows * scale);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let line: Vec<char> = art
+            .get(y / scale)
+            .map(|l| l.chars().collect())
+            .unwrap_or_default();
+        for x in 0..w {
+            let lit = line.get(x / scale).is_some_and(|c| *c != ' ');
+            let [r, g, b] = if lit { fg } else { bg };
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
     }
-    (size, size, rgba)
+    (w, h, rgba)
 }
+
+/// 8×4 ASCII terminal window for the built-in demo option.
+const GLYPH_TERM: [&str; 4] = ["+------+", "| >_   |", "|      |", "+------+"];
+
+/// 5×3 ASCII bitmaps for the colored swatch demo options.
+const GLYPH_R: [&str; 5] = ["## ", "# #", "## ", "# #", "# #"];
+const GLYPH_G: [&str; 5] = ["###", "#  ", "# #", "# #", "###"];
+const GLYPH_B: [&str; 5] = ["## ", "# #", "## ", "# #", "## "];
 
 #[derive(Default)]
 struct DmenuOpts {
@@ -226,17 +253,20 @@ fn run_image_demo(dir: &str) -> Result<(), String> {
             .option(ModalOption::new(format!("file:{}", path.display()), stem).icon(path.clone()));
     }
 
+    // Procedural ASCII-art icons: nothing is embedded or read from disk.
+    let (tw, th, tpx) = ascii_icon(&GLYPH_TERM, [225, 228, 235], [28, 28, 34], 4);
     modal = modal.option(
-        ModalOption::new("bytes:terminal", "Terminal (embedded)")
-            .icon(include_bytes!("../../assets/terminal.png").to_vec()),
+        ModalOption::new("icon:terminal", "Terminal (ASCII icon)")
+            .description("Procedural icon, no image file")
+            .icon_pixels(tw, th, tpx),
     );
 
-    for (name, rgb) in [
-        ("red", [200, 60, 50]),
-        ("green", [60, 170, 80]),
-        ("blue", [80, 120, 220]),
+    for (name, glyph, rgb) in [
+        ("red", &GLYPH_R, [230, 90, 80]),
+        ("green", &GLYPH_G, [80, 190, 110]),
+        ("blue", &GLYPH_B, [110, 150, 240]),
     ] {
-        let (w, h, px) = solid_icon(24, rgb);
+        let (w, h, px) = ascii_icon(glyph, rgb, [28, 28, 34], 4);
         modal = modal.option(
             ModalOption::new(format!("swatch:{name}"), format!("{name} swatch"))
                 .icon_pixels(w, h, px),

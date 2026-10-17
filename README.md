@@ -78,7 +78,7 @@ let sel = Modal::new("Launcher")
     .run();
 ```
 
-Shortcut keys are consumed before the built-in keys (so they can rebind `Enter`), and `option` shortcuts render as the row hint automatically. A missing/invalid file makes `run()` return `ModalError::Shortcuts`. CLI: `r-modals --dmenu --shortcuts FILE` (or `--no-shortcuts` to skip the default file). See `assets/shortcuts.toml` for the full reference.
+Shortcut keys are consumed before the built-in keys (so they can rebind `Enter`), and `option` shortcuts render as the row hint automatically. A missing/invalid file makes `run()` return `ModalError::Shortcuts`. CLI: `r-modals --dmenu --shortcuts FILE` (or `--no-shortcuts` to skip the default file). See `examples/assets/shortcuts.toml` for the full reference.
 
 ## Dialogs
 
@@ -112,7 +112,7 @@ modal { width: 560px; border-radius: 12px; }
 search { background: #222228; color: #f0f0f5; }
 ```
 
-See `assets/theme.css` and `assets/themes/` for starting points.
+See `examples/assets/theme.css` (an example stylesheet) and `assets/themes/` (the built-in themes) for starting points.
 
 ## Examples
 
