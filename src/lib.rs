@@ -36,10 +36,6 @@
 //! This approximates on X11/Wayland without requiring
 //! compositor-specific layer-shell protocols.
 
-// Headless harness helpers live next to the code they test, so test
-// modules sit mid-file by design.
-#![allow(clippy::items_after_test_module)]
-
 mod app;
 mod confirm;
 mod css;
