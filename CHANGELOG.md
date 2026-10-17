@@ -11,6 +11,20 @@
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
 - First-query-occurrence highlight (underline, no layout shift)
 
+### Configurable shortcuts
+- File-driven key bindings: `Modal::shortcuts_file(path)`, `Modal::shortcuts_toml(text)`,
+  `Modal::shortcut(spec)`; TOML `[[shortcut]]` entries bind a key to an option id, a
+  `command` (+ `args`), or a `shell` one-liner — commands spawn detached on press
+- Shortcut keys are consumed before the built-in keys (can rebind `Enter`); the
+  most specific combo wins (`Ctrl+Shift+S` before `Ctrl+S`)
+- Bound `option` shortcuts auto-fill the row's right-aligned hint
+- Auto-loads `$XDG_CONFIG_HOME/r-modals/shortcuts.toml` (or
+  `~/.config/r-modals/shortcuts.toml`) when present; disable with
+  `Modal::auto_shortcuts(false)`
+- `ShortcutSpec`, `parse_shortcuts`, `load_shortcuts_file`, `default_shortcuts_path`;
+  `ModalError::Shortcuts` for parse/validation failures; reference in `assets/shortcuts.toml`
+- CLI: `r-modals --dmenu --shortcuts FILE` / `--no-shortcuts`
+
 ### New modal types
 - `Confirm::new(...).message(...).run() -> bool`
 - `Prompt::new(...).placeholder(...).password(...).run() -> Option<String>`

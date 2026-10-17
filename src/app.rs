@@ -1,3 +1,5 @@
+use crate::option::find_option_path;
+use crate::shortcut::ShortcutTarget;
 use crate::{IconSource, Layout, Modal, ModalOption, ModalSelection};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -330,6 +332,89 @@ impl ModalApp {
             query: self.query.clone(),
             custom_input: false,
         }))
+    }
+
+    /// Activate the option at `path`: drill into a submenu, or pick a leaf.
+    /// Used by file-configured shortcuts that target an option id.
+    fn activate_path(&mut self, path: &[usize], ctx: &egui::Context) {
+        let Some((&last, prefix)) = path.split_last() else {
+            return;
+        };
+        // Move to the level that owns the target.
+        self.nav_path = prefix.to_vec();
+        self.after_nav_change();
+        let info = self.level_opt(last).map(|o| {
+            (
+                o.has_children(),
+                o.activatable(),
+                o.id.clone(),
+                o.label.clone(),
+            )
+        });
+        match info {
+            Some((true, _, _, _)) => self.enter_level(last),
+            Some((false, true, id, label)) => self.finish(
+                Some(ModalSelection {
+                    id,
+                    label,
+                    index: last,
+                    path: path.to_vec(),
+                    query: self.query.clone(),
+                    custom_input: false,
+                }),
+                ctx,
+            ),
+            _ => {}
+        }
+    }
+
+    /// Consume a bound shortcut key, if one was pressed this frame, and act on
+    /// it. Returns true when a shortcut fired (the caller then stops handling
+    /// the frame's other keys).
+    fn fire_shortcut(&mut self, ctx: &egui::Context) -> bool {
+        if self.modal.compiled_shortcuts.is_empty() {
+            return false;
+        }
+        // One input lock for the whole keymap; `consume_key` matches logically
+        // and `compiled_shortcuts` is ordered most-specific-first, so
+        // `Ctrl+Shift+S` is seen before `Ctrl+S`.
+        let mut pressed: Option<usize> = None;
+        {
+            let shortcuts = &self.modal.compiled_shortcuts;
+            ctx.input_mut(|i| {
+                for (idx, sc) in shortcuts.iter().enumerate() {
+                    if i.consume_key(sc.modifiers, sc.key) {
+                        pressed = Some(idx);
+                        break;
+                    }
+                }
+            });
+        }
+        let Some(idx) = pressed else {
+            return false;
+        };
+        match self.modal.compiled_shortcuts[idx].target.clone() {
+            ShortcutTarget::Option(id) => {
+                if let Some(path) = find_option_path(&self.modal.options, &id) {
+                    self.activate_path(&path, ctx);
+                }
+            }
+            ShortcutTarget::Action(action) => {
+                // Standalone commands have no row to land on: run the action
+                // (best-effort, detached) and close with no pick.
+                let sel = ModalSelection {
+                    id: "shortcut".to_string(),
+                    label: self.modal.compiled_shortcuts[idx].hint.clone(),
+                    index: 0,
+                    path: Vec::new(),
+                    query: String::new(),
+                    custom_input: false,
+                };
+                let _ = action.execute(&sel);
+                self.finish(None, ctx);
+            }
+        }
+        true
     }
 
     fn finish(&self, sel: Option<ModalSelection>, ctx: &egui::Context) {
@@ -873,6 +958,26 @@ mod tests {
             repeat: false,
             modifiers: egui::Modifiers::NONE,
         }
+    }
+
+    fn modified_key_event(key: egui::Key, modifiers: egui::Modifiers) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers,
+        }
+    }
+
+    fn viewport_closed(out: &egui::FullOutput) -> bool {
+        out.viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|vo| {
+                vo.commands
+                    .iter()
+                    .any(|c| matches!(c, egui::ViewportCommand::Close))
+            })
     }
 
     /// egui mechanism check with the same nesting as `show_grid`:
@@ -1524,6 +1629,103 @@ mod tests {
         let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
         assert_eq!(app.cursor, cols);
     }
+
+    fn shortcut_app(
+        toml: &str,
+    ) -> (
+        egui::Context,
+        ModalApp,
+        eframe::Frame,
+        Arc<Mutex<Option<ModalSelection>>>,
+    ) {
+        let ctx = egui::Context::default();
+        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+        let mut modal = crate::Modal::new("shortcuts")
+            .option(crate::ModalOption::new("a", "Alpha"))
+            .option(crate::ModalOption::new("b", "Beta"))
+            .shortcuts_toml(toml);
+        // `Modal::run` resolves shortcuts; the headless harness calls it here.
+        modal.resolve_shortcuts().unwrap();
+        let result = Arc::new(Mutex::new(None));
+        let app = ModalApp::new(&cc, modal, result.clone());
+        let frame = eframe::Frame::_new_kittest();
+        (ctx, app, frame, result)
+    }
+
+    /// A bound `option` shortcut picks that option, and its binding shows up
+    /// as the row hint.
+    #[test]
+    fn shortcut_key_picks_bound_option() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame, result) =
+            shortcut_app("[[shortcut]]\nkey = \"Ctrl+B\"\noption = \"b\"\n");
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events
+            .push(modified_key_event(egui::Key::B, egui::Modifiers::CTRL));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(
+            result.lock().unwrap().clone().map(|s| s.id),
+            Some("b".to_string())
+        );
+        assert_eq!(app.modal.options[1].shortcut.as_deref(), Some("Ctrl+B"));
+    }
+
+    /// `consume_key` ignores extra shift/alt, so the richer combo must be
+    /// tested first or `Ctrl+S` would swallow `Ctrl+Shift+S`.
+    #[test]
+    fn shortcut_matches_most_specific_combo() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame, result) = shortcut_app(
+            "[[shortcut]]\nkey = \"Ctrl+S\"\noption = \"a\"\n\n\
+             [[shortcut]]\nkey = \"Ctrl+Shift+S\"\noption = \"b\"\n",
+        );
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(modified_key_event(
+            egui::Key::S,
+            egui::Modifiers {
+                ctrl: true,
+                shift: true,
+                ..egui::Modifiers::NONE
+            },
+        ));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(
+            result.lock().unwrap().clone().map(|s| s.id),
+            Some("b".to_string())
+        );
+    }
+
+    /// A standalone command/shell shortcut runs and closes the modal without
+    /// a pick.
+    #[test]
+    fn shortcut_shell_runs_and_closes_without_pick() {
+        use eframe::App as _;
+        let (ctx, mut app, mut frame, result) =
+            shortcut_app("[[shortcut]]\nkey = \"F5\"\nshell = \"true\"\n");
+        let mut t = 0.0;
+        for _ in 0..3 {
+            t += 1.0 / 60.0;
+            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+        }
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(key_event(egui::Key::F5));
+        let out = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert!(viewport_closed(&out), "shortcut should close the modal");
+        assert!(result.lock().unwrap().is_none());
+    }
 }
 
 impl eframe::App for ModalApp {
@@ -1534,6 +1736,13 @@ impl eframe::App for ModalApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // File-configured shortcuts win over the built-in keys so a user can
+        // rebind them (e.g. make `Enter` do something else). Checked first.
+        if self.fire_shortcut(ctx) {
+            self.scroll_to_cursor = false;
+            return;
+        }
+
         let t = self.modal.theme.clone();
 
         // Global keys — consumed under a single input lock instead of one

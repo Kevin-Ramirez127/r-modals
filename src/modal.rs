@@ -1,3 +1,5 @@
+use crate::option::{find_option_path, option_at_mut};
+use crate::shortcut::{self, CompiledShortcut, ShortcutSource, ShortcutSpec, ShortcutTarget};
 use crate::{filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, Theme};
 use std::sync::{Arc, Mutex};
 
@@ -55,6 +57,14 @@ pub struct Modal {
     pub(crate) max_results: Option<usize>,
     pub(crate) fonts: Vec<(String, Vec<u8>)>,
     pub(crate) history_file: Option<String>,
+    /// File / inline / programmatic shortcut declarations, resolved by
+    /// [`Modal::resolve_shortcuts`] at the start of [`Modal::run`].
+    pub(crate) shortcut_sources: Vec<ShortcutSource>,
+    /// Validated shortcuts the app matches against keyboard input.
+    pub(crate) compiled_shortcuts: Vec<CompiledShortcut>,
+    /// Load [`crate::default_shortcuts_path`] when present and no explicit
+    /// source was given. Defaults to `true`.
+    pub(crate) auto_shortcuts: bool,
 }
 
 impl Modal {
@@ -81,6 +91,9 @@ impl Modal {
             max_results: None,
             fonts: Vec::new(),
             history_file: None,
+            shortcut_sources: Vec::new(),
+            compiled_shortcuts: Vec::new(),
+            auto_shortcuts: true,
         }
     }
 
@@ -291,6 +304,99 @@ impl Modal {
         self
     }
 
+    /// Load keyboard shortcuts from a TOML file (format documented on
+    /// [`crate::ShortcutSpec`]).
+    ///
+    /// Shortcut keys are consumed before the built-in modal keys, so a file
+    /// can override them (e.g. rebind `Enter`). A missing or invalid file
+    /// makes [`Modal::run`] return [`ModalError::Shortcuts`].
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .shortcuts_file("~/.config/r-modals/shortcuts.toml")
+    ///     .run();
+    /// ```
+    pub fn shortcuts_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.shortcut_sources
+            .push(ShortcutSource::File(path.into()));
+        self
+    }
+
+    /// Define keyboard shortcuts from inline TOML (same format as
+    /// [`Modal::shortcuts_file`]).
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .shortcuts_toml("[[shortcut]]\nkey = \"Ctrl+O\"\noption = \"ff\"\n")
+    ///     .run();
+    /// ```
+    pub fn shortcuts_toml(mut self, toml: impl Into<String>) -> Self {
+        self.shortcut_sources
+            .push(ShortcutSource::Toml(toml.into()));
+        self
+    }
+
+    /// Add one shortcut programmatically (see [`crate::ShortcutSpec`]).
+    pub fn shortcut(mut self, spec: ShortcutSpec) -> Self {
+        self.shortcut_sources.push(ShortcutSource::Spec(spec));
+        self
+    }
+
+    /// Toggle auto-loading [`crate::default_shortcuts_path`] when it exists and
+    /// no explicit shortcut source was added. Defaults to `true`.
+    pub fn auto_shortcuts(mut self, yes: bool) -> Self {
+        self.auto_shortcuts = yes;
+        self
+    }
+
+    /// Read and validate every shortcut source into `compiled_shortcuts`, and
+    /// auto-fill the matching rows' shortcut hints. Split out of
+    /// [`Modal::run`] so it is testable without a display.
+    pub(crate) fn resolve_shortcuts(&mut self) -> Result<(), ModalError> {
+        let mut specs: Vec<ShortcutSpec> = Vec::new();
+        for source in &self.shortcut_sources {
+            match source {
+                ShortcutSource::File(p) => {
+                    specs.extend(shortcut::load_shortcuts_file(p).map_err(ModalError::Shortcuts)?)
+                }
+                ShortcutSource::Toml(s) => {
+                    specs.extend(shortcut::parse_shortcuts(s).map_err(ModalError::Shortcuts)?)
+                }
+                ShortcutSource::Spec(s) => specs.push(s.clone()),
+            }
+        }
+        // Default file is a fallback only: never mixed with explicit sources.
+        if specs.is_empty() && self.shortcut_sources.is_empty() && self.auto_shortcuts {
+            if let Some(path) = shortcut::default_shortcuts_path() {
+                if path.is_file() {
+                    specs = shortcut::load_shortcuts_file(&path).map_err(ModalError::Shortcuts)?;
+                }
+            }
+        }
+        let mut compiled = shortcut::compile_all(&specs).map_err(ModalError::Shortcuts)?;
+        // An `option` shortcut whose id is absent would be a dead key: drop it.
+        compiled.retain(|c| match &c.target {
+            ShortcutTarget::Option(id) => find_option_path(&self.options, id).is_some(),
+            ShortcutTarget::Action(_) => true,
+        });
+        // Surface the binding on the row unless it already declares one.
+        for c in &compiled {
+            if let ShortcutTarget::Option(id) = &c.target {
+                if let Some(path) = find_option_path(&self.options, id) {
+                    if let Some(opt) = option_at_mut(&mut self.options, &path) {
+                        if opt.shortcut.is_none() {
+                            opt.shortcut = Some(c.hint.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.compiled_shortcuts = compiled;
+        Ok(())
+    }
+
     /// Filter without opening a window (useful for tests / headless use).
     pub fn filtered_indices(&self, query: &str) -> Vec<usize> {
         if !self.search.enabled {
@@ -422,6 +528,7 @@ impl Modal {
         let actions = self.collect_actions();
         let mut modal = self;
         modal.apply_history();
+        modal.resolve_shortcuts()?;
         modal.theme = modal.resolved_theme()?;
         let history_file = modal.history_file.clone();
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
@@ -652,8 +759,90 @@ mod tests {
         assert!(m.footer_hint.is_none());
         assert!(m.fonts.is_empty());
         assert!(m.history_file.is_none());
+        assert!(m.shortcut_sources.is_empty());
+        assert!(m.compiled_shortcuts.is_empty());
+        assert!(m.auto_shortcuts);
         assert!(!m.search.fuzzy);
         assert_eq!(m.empty_message, "No matches");
+    }
+
+    #[test]
+    fn resolve_shortcuts_fills_hints_and_drops_unknown_ids() {
+        let mut m = Modal::new("x")
+            .option(ModalOption::new("ff", "Firefox"))
+            .option(ModalOption::new("term", "Terminal").shortcut("Ctrl+T"))
+            .shortcuts_toml(
+                r#"
+                [[shortcut]]
+                key = "Ctrl+O"
+                option = "ff"
+
+                [[shortcut]]
+                key = "Ctrl+Alt+T"
+                option = "term"
+
+                [[shortcut]]
+                key = "Ctrl+Q"
+                option = "ghost"
+                "#,
+            );
+        m.resolve_shortcuts().unwrap();
+        // A matching row gains the binding hint; an explicit one is kept.
+        assert_eq!(m.options[0].shortcut.as_deref(), Some("Ctrl+O"));
+        assert_eq!(m.options[1].shortcut.as_deref(), Some("Ctrl+T"));
+        // The ghost-id shortcut is dropped: only the two real ones remain.
+        assert_eq!(m.compiled_shortcuts.len(), 2);
+        assert_eq!(m.compiled_shortcuts[0].hint, "Ctrl+Alt+T");
+    }
+
+    #[test]
+    fn resolve_shortcuts_command_target_and_errors() {
+        let mut m = Modal::new("x")
+            .option(ModalOption::new("a", "A"))
+            .shortcuts_toml(
+                r#"
+                [[shortcut]]
+                key = "F5"
+                command = "echo"
+                args = ["hi"]
+                "#,
+            );
+        m.resolve_shortcuts().unwrap();
+        assert!(matches!(
+            m.compiled_shortcuts[0].target,
+            crate::shortcut::ShortcutTarget::Action(crate::SelectAction::Command { .. })
+        ));
+
+        // Invalid TOML surfaces as ModalError::Shortcuts.
+        let mut bad = Modal::new("x")
+            .option(ModalOption::new("a", "A"))
+            .shortcuts_toml("[[shortcut]");
+        assert!(matches!(
+            bad.resolve_shortcuts(),
+            Err(ModalError::Shortcuts(_))
+        ));
+
+        // Unknown key names surface too.
+        let mut bad_key = Modal::new("x")
+            .option(ModalOption::new("a", "A"))
+            .shortcuts_toml("[[shortcut]]\nkey = \"Ctrl+Nope\"\noption = \"a\"\n");
+        assert!(matches!(
+            bad_key.resolve_shortcuts(),
+            Err(ModalError::Shortcuts(_))
+        ));
+    }
+
+    #[test]
+    fn programmatic_shortcut_and_auto_toggle() {
+        let mut m = Modal::new("x")
+            .option(ModalOption::new("a", "A"))
+            .shortcut(crate::ShortcutSpec::option("Ctrl+A", "a"));
+        assert_eq!(m.compiled_shortcuts.len(), 0);
+        m.resolve_shortcuts().unwrap();
+        assert_eq!(m.compiled_shortcuts.len(), 1);
+        assert_eq!(m.options[0].shortcut.as_deref(), Some("Ctrl+A"));
+        assert!(Modal::new("x").auto_shortcuts);
+        assert!(!Modal::new("x").auto_shortcuts(false).auto_shortcuts);
     }
 
     #[test]

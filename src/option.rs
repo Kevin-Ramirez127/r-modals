@@ -529,9 +529,65 @@ impl ModalOption {
     }
 }
 
+/// Index path to the option with `id`, depth-first over submenus.
+/// `None` when no option carries that id.
+pub(crate) fn find_option_path(opts: &[ModalOption], id: &str) -> Option<Vec<usize>> {
+    for (i, o) in opts.iter().enumerate() {
+        if o.id == id {
+            return Some(vec![i]);
+        }
+        if let Some(mut child) = find_option_path(&o.children, id) {
+            child.insert(0, i);
+            return Some(child);
+        }
+    }
+    None
+}
+
+/// Mutable reference to the option at `path` (as returned by
+/// [`find_option_path`]).
+pub(crate) fn option_at_mut<'a>(
+    opts: &'a mut [ModalOption],
+    path: &[usize],
+) -> Option<&'a mut ModalOption> {
+    let (&first, rest) = path.split_first()?;
+    let opt = opts.get_mut(first)?;
+    if rest.is_empty() {
+        Some(opt)
+    } else {
+        option_at_mut(&mut opt.children, rest)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn find_option_path_walks_submenus() {
+        let opts = vec![
+            ModalOption::new("a", "A"),
+            ModalOption::new("p", "Parent").sub_options([
+                ModalOption::new("b", "B"),
+                ModalOption::new("c", "C").sub_option(ModalOption::new("deep", "Deep")),
+            ]),
+        ];
+        assert_eq!(find_option_path(&opts, "a"), Some(vec![0]));
+        assert_eq!(find_option_path(&opts, "p"), Some(vec![1]));
+        assert_eq!(find_option_path(&opts, "c"), Some(vec![1, 1]));
+        assert_eq!(find_option_path(&opts, "deep"), Some(vec![1, 1, 0]));
+        assert_eq!(find_option_path(&opts, "missing"), None);
+    }
+
+    #[test]
+    fn option_at_mut_reaches_nested_option() {
+        let mut opts =
+            vec![ModalOption::new("p", "Parent").sub_option(ModalOption::new("c", "Child"))];
+        option_at_mut(&mut opts, &[0, 0]).unwrap().shortcut = Some("Ctrl+C".to_string());
+        assert_eq!(opts[0].children[0].shortcut.as_deref(), Some("Ctrl+C"));
+        assert!(option_at_mut(&mut opts, &[9]).is_none());
+        assert!(option_at_mut(&mut opts, &[]).is_none());
+    }
 
     #[test]
     fn bytes_cache_key_distinguishes_content() {

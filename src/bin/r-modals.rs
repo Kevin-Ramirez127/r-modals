@@ -25,6 +25,9 @@ fn print_help() {
          \x20  --empty-message TEXT   shown when nothing matches\n\
          \x20  --max-results N        cap visible rows (best matches first)\n\
          \x20  --print-id             print option id instead of label\n\
+         \x20  --shortcuts FILE       key bindings from a TOML file (bind a key to\n\
+         \x20                         an option id, or run a command/shell)\n\
+         \x20  --no-shortcuts         don't auto-load ~/.config/r-modals/shortcuts.toml\n\
          \x20  -h, --help             this help\n\
          \n\
          EXIT CODES\n\
@@ -33,6 +36,7 @@ fn print_help() {
          EXAMPLES\n\
          \x20  ls ~/bin | r-modals --dmenu --prompt Run\n\
          \x20  printf 'a\\nb\\nc' | r-modals --dmenu --fuzzy --multi\n\
+         \x20  ls ~/bin | r-modals --dmenu --shortcuts ~/.config/r-modals/shortcuts.toml\n\
          \x20  r-modals ~/Pictures/wallpapers"
     );
 }
@@ -71,6 +75,8 @@ struct DmenuOpts {
     empty_message: Option<String>,
     max_results: Option<usize>,
     print_id: bool,
+    shortcuts: Option<String>,
+    no_shortcuts: bool,
 }
 
 fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>), String> {
@@ -143,6 +149,12 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
     }
     if let Some(m) = opts.max_results {
         modal = modal.max_results(m);
+    }
+    // Explicit --shortcuts FILE wins; --no-shortcuts disables the default file.
+    if let Some(path) = opts.shortcuts {
+        modal = modal.shortcuts_file(path);
+    } else if opts.no_shortcuts {
+        modal = modal.auto_shortcuts(false);
     }
     for line in &lines {
         modal = modal.option(ModalOption::new(line.clone(), line.clone()));
@@ -277,6 +289,8 @@ fn main() {
                 _ => bad = Some("--max-results needs a number".to_string()),
             },
             "--print-id" => opts.print_id = true,
+            "--shortcuts" => opts.shortcuts = next(&mut i),
+            "--no-shortcuts" => opts.no_shortcuts = true,
             s if s.starts_with('-') => bad = Some(format!("unknown flag {s} (see --help)")),
             s => {
                 if dir.is_none() && !dmenu {
