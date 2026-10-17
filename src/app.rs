@@ -895,9 +895,13 @@ fn decode_bytes(bytes: &[u8]) -> Option<egui::ColorImage> {
 mod tests {
     use super::*;
 
+    /// Test-only icon (a 32×32 PNG) under `tests/assets/`, so unit tests never
+    /// depend on the example/demo assets.
+    const TEST_ICON: &str = "tests/assets/icon.png";
+
     #[test]
     fn decode_valid_png() {
-        let bytes = include_bytes!("../examples/assets/firefox.png");
+        let bytes = include_bytes!("../tests/assets/icon.png");
         assert!(decode_bytes(bytes).is_some());
         let img = decode_bytes(bytes).unwrap();
         assert!(img.width() > 0 && img.height() > 0);
@@ -911,15 +915,12 @@ mod tests {
 
     #[test]
     fn load_icon_variants() {
-        // File (ships with repo)
-        assert!(load_icon(&IconSource::File("examples/assets/firefox.png".into())).is_some());
+        // File (ships with the tests, under tests/assets)
+        assert!(load_icon(&IconSource::File(TEST_ICON.into())).is_some());
         // Missing file -> None (graceful)
-        assert!(load_icon(&IconSource::File(
-            "examples/assets/does-not-exist.png".into()
-        ))
-        .is_none());
+        assert!(load_icon(&IconSource::File("tests/assets/does-not-exist.png".into())).is_none());
         // Bytes
-        let bytes = include_bytes!("../examples/assets/terminal.png").to_vec();
+        let bytes = include_bytes!("../tests/assets/icon.png").to_vec();
         assert!(load_icon(&IconSource::Bytes(bytes)).is_some());
         assert!(load_icon(&IconSource::Bytes(b"junk".to_vec())).is_none());
         // Pixels: valid + length mismatch
