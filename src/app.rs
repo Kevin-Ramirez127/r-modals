@@ -1,4 +1,5 @@
 use crate::option::find_option_path;
+use crate::prefix::{self, CompiledPrefix};
 use crate::shortcut::ShortcutTarget;
 use crate::{IconSource, Layout, Modal, ModalOption, ModalSelection};
 use std::collections::HashMap;
@@ -366,6 +367,22 @@ impl ModalApp {
             ),
             _ => {}
         }
+    }
+
+    /// Fire a watched prefix's action with the query remainder, returning the
+    /// selection handed to the action (the modal then closes with no pick).
+    /// Split out so it is testable without a display.
+    fn run_prefix(cp: &CompiledPrefix, rest: &str, nav_path: &[usize]) -> ModalSelection {
+        let sel = ModalSelection {
+            id: cp.prefix.clone(),
+            label: cp.hint.clone(),
+            index: 0,
+            path: nav_path.to_vec(),
+            query: rest.to_string(),
+            custom_input: true,
+        };
+        let _ = cp.execute(&sel, rest);
+        sel
     }
 
     /// Consume a bound shortcut key, if one was pressed this frame, and act on
@@ -1041,6 +1058,16 @@ impl eframe::App for ModalApp {
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
         if enter {
+            // A registered prefix confirmed with Enter runs its action and
+            // closes with no pick — this wins over option activation.
+            if let Some((cp, rest)) =
+                prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
+            {
+                let cp = cp.clone();
+                Self::run_prefix(&cp, &rest, &self.nav_path);
+                self.finish(None, ctx);
+                return;
+            }
             if visible.is_empty() {
                 // Command-palette style: return the typed text itself.
                 if self.modal.allow_custom_input && !self.query.is_empty() {
@@ -1157,6 +1184,18 @@ impl eframe::App for ModalApp {
                     self.cursor = 0;
                 }
                 ui.add_space(8.0);
+                // Active prefix: Enter runs it instead of picking a row.
+                if let Some((p, _)) =
+                    prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
+                {
+                    let hint = p.hint.clone();
+                    ui.label(
+                        egui::RichText::new(format!("↵ run \"{hint}\""))
+                            .size(t.font_size * 0.8)
+                            .color(t.dim_text),
+                    );
+                    ui.add_space(6.0);
+                }
             } else if self.modal.search.autofocus && !self.focused_once {
                 // No search field: nothing to focus; mark done so we don't retry.
                 self.focused_once = true;

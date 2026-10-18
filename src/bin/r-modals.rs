@@ -28,6 +28,9 @@ fn print_help() {
          \x20  --shortcuts FILE       key bindings from a TOML file (bind a key to\n\
          \x20                         an option id, or run a command/shell)\n\
          \x20  --no-shortcuts         don't auto-load ~/.config/r-modals/shortcuts.toml\n\
+         \x20  --prefixes FILE        query prefixes from a TOML file (type the\n\
+         \x20                         prefix, Enter runs its command/shell)\n\
+         \x20  --no-prefixes          don't auto-load ~/.config/r-modals/prefixes.toml\n\
          \x20  -h, --help             this help\n\
          \n\
          EXIT CODES\n\
@@ -37,6 +40,7 @@ fn print_help() {
          \x20  ls ~/bin | r-modals --dmenu --prompt Run\n\
          \x20  printf 'a\\nb\\nc' | r-modals --dmenu --fuzzy --multi\n\
          \x20  ls ~/bin | r-modals --dmenu --shortcuts ~/.config/r-modals/shortcuts.toml\n\
+         \x20  ls ~/bin | r-modals --dmenu --prefixes ~/.config/r-modals/prefixes.toml\n\
          \x20  r-modals ~/Pictures/wallpapers"
     );
 }
@@ -104,6 +108,8 @@ struct DmenuOpts {
     print_id: bool,
     shortcuts: Option<String>,
     no_shortcuts: bool,
+    prefixes: Option<String>,
+    no_prefixes: bool,
 }
 
 fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>), String> {
@@ -182,6 +188,12 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
         modal = modal.shortcuts_file(path);
     } else if opts.no_shortcuts {
         modal = modal.auto_shortcuts(false);
+    }
+    // Same contract for query prefixes.
+    if let Some(path) = opts.prefixes {
+        modal = modal.prefixes_file(path);
+    } else if opts.no_prefixes {
+        modal = modal.auto_prefixes(false);
     }
     for line in &lines {
         modal = modal.option(ModalOption::new(line.clone(), line.clone()));
@@ -321,6 +333,8 @@ fn main() {
             "--print-id" => opts.print_id = true,
             "--shortcuts" => opts.shortcuts = next(&mut i),
             "--no-shortcuts" => opts.no_shortcuts = true,
+            "--prefixes" => opts.prefixes = next(&mut i),
+            "--no-prefixes" => opts.no_prefixes = true,
             s if s.starts_with('-') => bad = Some(format!("unknown flag {s} (see --help)")),
             s => {
                 if dir.is_none() && !dmenu {

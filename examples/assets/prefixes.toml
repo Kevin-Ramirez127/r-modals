@@ -1,0 +1,39 @@
+# r-modals query prefixes
+#
+# Copy this file to  ~/.config/r-modals/prefixes.toml  and r-modals loads it
+# automatically (see `Modal::auto_prefixes`, on by default). Point an explicit
+# file at it with `Modal::prefixes_file(path)` or `r-modals --dmenu --prefixes
+# FILE`.
+#
+# Each [[prefix]] binds the start of the search query to exactly one of:
+#   command = "<prog>"        spawn a detached program (optional `args = [..]`)
+#   shell   = "<one-liner>"   run a detached shell command (sh -c / cmd /C)
+#
+# Optional:
+#   hint = "..."              label shown in the hint / handed to the action
+#
+# Type the prefix and press Enter to run its action; the text after the prefix
+# (the remainder) replaces the `{query}` token. When no `{query}` is present
+# the remainder is appended: a trailing argument for `command`, or a single
+# shell-quoted word for `shell`. In `shell`, `{query}` is inserted
+# shell-quoted, so don't wrap it in quotes yourself. A bare prefix (empty
+# remainder) still runs the action.
+#
+# More than one prefix may match; the longest wins (">>" beats ">").
+
+# Notify with the typed text.
+[[prefix]]
+prefix = ">"
+command = "notify-send"
+args = ["r-modals", "{query}"]
+
+# Search the web for the typed text.
+[[prefix]]
+prefix = "?"
+shell = "xdg-open https://duckduckgo.com/?q={query}"
+hint = "Web search"
+
+# A bare prefix with no remainder.
+[[prefix]]
+prefix = ":"
+shell = "notify-send r-modals 'palette'"

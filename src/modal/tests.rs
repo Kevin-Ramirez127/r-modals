@@ -148,6 +148,9 @@ fn new_builder_defaults() {
     assert!(m.shortcut_sources.is_empty());
     assert!(m.compiled_shortcuts.is_empty());
     assert!(m.auto_shortcuts);
+    assert!(m.prefix_sources.is_empty());
+    assert!(m.compiled_prefixes.is_empty());
+    assert!(m.auto_prefixes);
     assert!(!m.search.fuzzy);
     assert_eq!(m.empty_message, "No matches");
 }
@@ -229,6 +232,106 @@ fn programmatic_shortcut_and_auto_toggle() {
     assert_eq!(m.options[0].shortcut.as_deref(), Some("Ctrl+A"));
     assert!(Modal::new("x").auto_shortcuts);
     assert!(!Modal::new("x").auto_shortcuts(false).auto_shortcuts);
+}
+
+#[test]
+fn resolve_prefixes_compiles_and_errors() {
+    let mut m = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefixes_toml(
+            r#"
+            [[prefix]]
+            prefix = ">"
+            command = "notify-send"
+            args = ["{query}"]
+
+            [[prefix]]
+            prefix = "?"
+            shell = "firefox --search {query}"
+            "#,
+        );
+    m.resolve_prefixes().unwrap();
+    assert_eq!(m.compiled_prefixes.len(), 2);
+    // Longest prefix first (stable among ties: ">" before "?" by length sort).
+    assert!(matches!(
+        m.compiled_prefixes[0].action,
+        crate::SelectAction::Command { .. }
+    ));
+    assert!(matches!(
+        m.compiled_prefixes[1].action,
+        crate::SelectAction::Shell(_)
+    ));
+
+    // Invalid TOML surfaces as ModalError::Prefixes.
+    let mut bad = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefixes_toml("[[prefix]");
+    assert!(matches!(
+        bad.resolve_prefixes(),
+        Err(ModalError::Prefixes(_))
+    ));
+
+    // A spec with an empty prefix surfaces too.
+    let mut bad_spec = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefix(super::PrefixSpec::shell("  ", "true"));
+    assert!(matches!(
+        bad_spec.resolve_prefixes(),
+        Err(ModalError::Prefixes(_))
+    ));
+}
+
+#[test]
+fn programmatic_prefix_and_auto_toggle() {
+    let mut m = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefix(super::PrefixSpec::shell(":", "true"));
+    assert_eq!(m.compiled_prefixes.len(), 0);
+    m.resolve_prefixes().unwrap();
+    assert_eq!(m.compiled_prefixes.len(), 1);
+    assert_eq!(m.compiled_prefixes[0].prefix, ":");
+    assert!(Modal::new("x").auto_prefixes);
+    assert!(!Modal::new("x").auto_prefixes(false).auto_prefixes);
+}
+
+#[test]
+fn prefix_action_accepts_callbacks_and_rejects_empty_prefix() {
+    use std::sync::{Arc, Mutex};
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let seen2 = seen.clone();
+    let mut m = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefix_action(
+            ">",
+            SelectAction::Callback(Arc::new(move |sel| {
+                seen2.lock().unwrap().push(sel.query.clone());
+            })),
+        );
+    m.resolve_prefixes().unwrap();
+    assert!(matches!(
+        m.compiled_prefixes[0].action,
+        SelectAction::Callback(_)
+    ));
+    // `ModalApp` hands the trimmed remainder to the action via `selection.query`.
+    let sel = crate::ModalSelection {
+        id: m.compiled_prefixes[0].prefix.clone(),
+        label: m.compiled_prefixes[0].hint.clone(),
+        index: 0,
+        path: Vec::new(),
+        query: "ls -la".to_string(),
+        custom_input: true,
+    };
+    m.compiled_prefixes[0].execute(&sel, "ls -la").unwrap();
+    assert_eq!(*seen.lock().unwrap(), vec!["ls -la".to_string()]);
+
+    // An empty prefix would swallow every query: rejected at resolve time.
+    let mut bad = Modal::new("x")
+        .option(ModalOption::new("a", "A"))
+        .prefix_action("   ", SelectAction::Shell("true".to_string()));
+    assert!(matches!(
+        bad.resolve_prefixes(),
+        Err(ModalError::Prefixes(_))
+    ));
 }
 
 #[test]

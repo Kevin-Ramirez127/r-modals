@@ -1,6 +1,10 @@
 use crate::option::{find_option_path, option_at_mut};
+use crate::prefix::{self, CompiledPrefix, PrefixSource, PrefixSpec};
 use crate::shortcut::{self, CompiledShortcut, ShortcutSource, ShortcutSpec, ShortcutTarget};
-use crate::{filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, Theme};
+use crate::{
+    filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, SelectAction,
+    Theme,
+};
 use std::sync::{Arc, Mutex};
 
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
@@ -65,6 +69,14 @@ pub struct Modal {
     /// Load [`crate::default_shortcuts_path`] when present and no explicit
     /// source was given. Defaults to `true`.
     pub(crate) auto_shortcuts: bool,
+    /// File / inline / programmatic prefix declarations, resolved by
+    /// [`Modal::resolve_prefixes`] at the start of [`Modal::run`].
+    pub(crate) prefix_sources: Vec<PrefixSource>,
+    /// Validated prefixes the app matches against the query.
+    pub(crate) compiled_prefixes: Vec<CompiledPrefix>,
+    /// Load [`crate::default_prefixes_path`] when present and no explicit
+    /// source was given. Defaults to `true`.
+    pub(crate) auto_prefixes: bool,
 }
 
 impl Modal {
@@ -94,6 +106,9 @@ impl Modal {
             shortcut_sources: Vec::new(),
             compiled_shortcuts: Vec::new(),
             auto_shortcuts: true,
+            prefix_sources: Vec::new(),
+            compiled_prefixes: Vec::new(),
+            auto_prefixes: true,
         }
     }
 
@@ -351,6 +366,75 @@ impl Modal {
         self
     }
 
+    /// Load query prefixes from a TOML file (format documented on
+    /// [`crate::PrefixSpec`]).
+    ///
+    /// A registered prefix at the start of the query, confirmed with `Enter`,
+    /// runs its action and closes the modal without returning a pick. A
+    /// missing or invalid file makes [`Modal::run`] return
+    /// [`ModalError::Prefixes`].
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .prefixes_file("~/.config/r-modals/prefixes.toml")
+    ///     .run();
+    /// ```
+    pub fn prefixes_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.prefix_sources.push(PrefixSource::File(path.into()));
+        self
+    }
+
+    /// Define query prefixes from inline TOML (same format as
+    /// [`Modal::prefixes_file`]).
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .prefixes_toml("[[prefix]]\nprefix = \">\"\nshell = \"notify-send {query}\"\n")
+    ///     .run();
+    /// ```
+    pub fn prefixes_toml(mut self, toml: impl Into<String>) -> Self {
+        self.prefix_sources.push(PrefixSource::Toml(toml.into()));
+        self
+    }
+
+    /// Add one prefix programmatically (see [`crate::PrefixSpec`]).
+    pub fn prefix(mut self, spec: PrefixSpec) -> Self {
+        self.prefix_sources.push(PrefixSource::Spec(spec));
+        self
+    }
+
+    /// Add one prefix bound to a prebuilt [`SelectAction`] — including a Rust
+    /// closure ([`SelectAction::Callback`]), which TOML cannot express. The
+    /// closure receives the query remainder as `selection.query`.
+    ///
+    /// ```no_run
+    /// use r_modals::{Modal, SelectAction};
+    /// let sel = Modal::new("Launcher")
+    ///     .prefix_action(">", SelectAction::Callback(std::sync::Arc::new(|s| {
+    ///         println!("run: {}", s.query);
+    ///     })))
+    ///     .run();
+    /// ```
+    pub fn prefix_action(mut self, prefix: impl Into<String>, action: SelectAction) -> Self {
+        let prefix = prefix.into();
+        self.prefix_sources
+            .push(PrefixSource::Compiled(CompiledPrefix {
+                hint: prefix.clone(),
+                prefix,
+                action,
+            }));
+        self
+    }
+
+    /// Toggle auto-loading [`crate::default_prefixes_path`] when it exists and
+    /// no explicit prefix source was added. Defaults to `true`.
+    pub fn auto_prefixes(mut self, yes: bool) -> Self {
+        self.auto_prefixes = yes;
+        self
+    }
+
     /// Read and validate every shortcut source into `compiled_shortcuts`, and
     /// auto-fill the matching rows' shortcut hints. Split out of
     /// [`Modal::run`] so it is testable without a display.
@@ -394,6 +478,49 @@ impl Modal {
             }
         }
         self.compiled_shortcuts = compiled;
+        Ok(())
+    }
+
+    /// Read and validate every prefix source into `compiled_prefixes`. Split
+    /// out of [`Modal::run`] so it is testable without a display.
+    pub(crate) fn resolve_prefixes(&mut self) -> Result<(), ModalError> {
+        let mut compiled: Vec<CompiledPrefix> = Vec::new();
+        let mut explicit = false;
+        for source in &self.prefix_sources {
+            explicit = true;
+            match source {
+                PrefixSource::File(p) => {
+                    let specs = prefix::load_prefixes_file(p).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Toml(s) => {
+                    let specs = prefix::parse_prefixes(s).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Spec(s) => {
+                    compiled.push(prefix::compile(s).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Compiled(c) => {
+                    if c.prefix.trim().is_empty() {
+                        return Err(ModalError::Prefixes(
+                            "prefix entry has an empty prefix".to_string(),
+                        ));
+                    }
+                    compiled.push(c.clone());
+                }
+            }
+        }
+        // Default file is a fallback only: never mixed with explicit sources.
+        if !explicit && self.auto_prefixes {
+            if let Some(path) = prefix::default_prefixes_path() {
+                if path.is_file() {
+                    let specs = prefix::load_prefixes_file(&path).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+            }
+        }
+        prefix::sort_longest_first(&mut compiled);
+        self.compiled_prefixes = compiled;
         Ok(())
     }
 
@@ -520,6 +647,10 @@ impl Modal {
     /// [`ModalOption::shell`], [`ModalOption::on_select`]), it fires here —
     /// once, on the calling thread, after the window closes. A failing
     /// spawn fires the option's [`ModalOption::on_error`] fallback instead.
+    ///
+    /// A registered query prefix confirmed with `Enter` (see
+    /// [`Modal::prefixes_file`]) runs its action inside the window and closes
+    /// with `Ok(None)` — there is no row to return.
     pub fn run(self) -> Result<Option<ModalSelection>, ModalError> {
         if self.options.is_empty() {
             return Err(ModalError::NoOptions);
@@ -529,6 +660,7 @@ impl Modal {
         let mut modal = self;
         modal.apply_history();
         modal.resolve_shortcuts()?;
+        modal.resolve_prefixes()?;
         modal.theme = modal.resolved_theme()?;
         let history_file = modal.history_file.clone();
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));

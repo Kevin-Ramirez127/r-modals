@@ -9,6 +9,8 @@ pub enum ModalError {
     Css(String),
     /// A shortcuts file or entry failed to parse/validate.
     Shortcuts(String),
+    /// A prefixes file or entry failed to parse/validate.
+    Prefixes(String),
     /// The GUI backend failed to start (e.g. no display).
     Backend(String),
 }
@@ -19,6 +21,7 @@ impl std::fmt::Display for ModalError {
             ModalError::NoOptions => write!(f, "r-modals: no options provided"),
             ModalError::Css(e) => write!(f, "r-modals CSS error: {e}"),
             ModalError::Shortcuts(e) => write!(f, "r-modals shortcuts error: {e}"),
+            ModalError::Prefixes(e) => write!(f, "r-modals prefixes error: {e}"),
             ModalError::Backend(e) => write!(f, "r-modals backend error: {e}"),
         }
     }

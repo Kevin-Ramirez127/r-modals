@@ -139,7 +139,7 @@ pub fn load_shortcuts_file(path: &Path) -> Result<Vec<ShortcutSpec>, String> {
 }
 
 /// Expand a leading `~`/`~/…` to `$HOME`. Other paths are returned as-is.
-fn expand_tilde(path: &Path) -> PathBuf {
+pub(crate) fn expand_tilde(path: &Path) -> PathBuf {
     let Some(s) = path.to_str() else {
         return path.to_path_buf();
     };

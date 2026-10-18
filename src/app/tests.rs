@@ -837,3 +837,81 @@ fn shortcut_shell_runs_and_closes_without_pick() {
     assert!(viewport_closed(&out), "shortcut should close the modal");
     assert!(result.lock().unwrap().is_none());
 }
+
+fn prefix_app(
+    toml: &str,
+) -> (
+    egui::Context,
+    ModalApp,
+    eframe::Frame,
+    Arc<Mutex<Option<ModalSelection>>>,
+) {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let mut modal = crate::Modal::new("prefixes")
+        .option(crate::ModalOption::new("a", "Alpha"))
+        .option(crate::ModalOption::new("b", "Beta"))
+        .prefixes_toml(toml);
+    // `Modal::run` resolves prefixes; the headless harness calls it here.
+    modal.resolve_prefixes().unwrap();
+    let result = Arc::new(Mutex::new(None));
+    let app = ModalApp::new(&cc, modal, result.clone());
+    let frame = eframe::Frame::_new_kittest();
+    (ctx, app, frame, result)
+}
+
+/// A typed prefix confirmed with Enter runs its action and closes without a
+/// pick, even though matching options are visible.
+#[test]
+fn prefix_enter_runs_action_and_closes_without_pick() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, result) =
+        prefix_app("[[prefix]]\nprefix = \">\"\nshell = \"true\"\n");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    // Prefix plus a remainder; the option list still contains a valid pick.
+    app.query = "> hello".to_string();
+    t += 1.0 / 60.0;
+    let out = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
+    assert!(viewport_closed(&out), "prefix should close the modal");
+    assert!(result.lock().unwrap().is_none());
+}
+
+/// Without a matching prefix, Enter keeps its normal meaning (pick a row).
+#[test]
+fn enter_without_prefix_still_picks() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, result) =
+        prefix_app("[[prefix]]\nprefix = \">\"\nshell = \"true\"\n");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    t += 1.0 / 60.0;
+    let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
+    assert_eq!(
+        result.lock().unwrap().clone().map(|s| s.id),
+        Some("a".to_string())
+    );
+}
+
+/// `run_prefix` hands the trimmed remainder to the action as the selection's
+/// query (and the prefix hint as the label).
+#[test]
+fn run_prefix_builds_selection_with_remainder() {
+    let cp = crate::prefix::CompiledPrefix {
+        prefix: ">".to_string(),
+        hint: "Run".to_string(),
+        action: crate::SelectAction::Callback(std::sync::Arc::new(|_| {})),
+    };
+    let sel = ModalApp::run_prefix(&cp, "ls -la", &[1, 2]);
+    assert_eq!(sel.id, ">");
+    assert_eq!(sel.label, "Run");
+    assert_eq!(sel.query, "ls -la");
+    assert_eq!(sel.path, vec![1, 2]);
+    assert!(sel.custom_input);
+}

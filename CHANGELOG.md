@@ -30,10 +30,32 @@
 - `Prompt::new(...).placeholder(...).password(...).run() -> Option<String>`
 - `Modal::run_multi()` / `multi::run_multi` — Space-toggle multi-select
 
+### Search prefixes
+- Bind the start of the query to an action: `Modal::prefixes_file(path)`,
+  `Modal::prefixes_toml(text)`, `Modal::prefix(spec)`; TOML `[[prefix]]`
+  entries bind a prefix to a `command` (+ `args`) or a `shell` one-liner
+- `Modal::prefix_action(prefix, SelectAction)` binds a prebuilt action,
+  including a Rust closure that reads the remainder from `selection.query`
+- Typing a registered prefix and pressing `Enter` runs its action with the
+  text after the prefix (the remainder) and closes the modal without a pick —
+  the same contract as a standalone shortcut action
+- `{query}` in `args`/`shell` is replaced by the remainder (shell-quoted in
+  `shell`); without a placeholder the remainder is appended (a trailing
+  argument for `command`, a single quoted word for `shell`). Longest matching
+  prefix wins, and a bare prefix (empty remainder) still runs
+- Auto-loads `$XDG_CONFIG_HOME/r-modals/prefixes.toml` (or
+  `~/.config/r-modals/prefixes.toml`) when present; disable with
+  `Modal::auto_prefixes(false)`
+- `PrefixSpec`, `parse_prefixes`, `load_prefixes_file`, `default_prefixes_path`;
+  `ModalError::Prefixes` for parse/validation failures; reference in
+  `examples/assets/prefixes.toml`
+
 ### CLI (`r-modals --dmenu`)
 - stdin-lines → picker → stdout, `--prompt/--layout/--theme/--multi/--fuzzy/`
   `--case-sensitive/--allow-custom/--history-file/--empty-message/`
   `--max-results/--print-id`; exit codes 0 pick · 1 cancel · 2 error
+- `--shortcuts FILE` / `--no-shortcuts` and `--prefixes FILE` / `--no-prefixes`
+  for file-configured key bindings and query prefixes
 
 ### API / robustness
 - Modals are always borderless: `Theme::border`/`border_width` and
