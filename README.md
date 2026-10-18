@@ -8,6 +8,8 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Options** — label, description, and icons (file path, bytes, or raw RGBA)
 - **Submenus** — nest options with `.sub_option(...)` for drill-down navigation
 - **Actions** — run a command, shell one-liner, or Rust closure on select
+- **Shortcuts** — bind keys to an option id or a terminal command/shell from a TOML file (`Modal::shortcuts_file`, `Modal::shortcuts_toml`, `Modal::shortcut`); bound keys are consumed before the built-in ones and show up as row hints
+- **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query
 - **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
 - **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
@@ -50,6 +52,63 @@ if let Some(sel) = choice {
 Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + click works too.
 Extras: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P` move; `Ctrl+U` clears the query; `Space` toggles in `run_multi()`.
 
+## Shortcuts
+
+Bind keys to options or terminal commands from a TOML file:
+
+```toml
+# ~/.config/r-modals/shortcuts.toml  (auto-loaded when present)
+[[shortcut]]
+key = "Ctrl+O"
+option = "ff"                 # activate this option (pick + fire its action)
+
+[[shortcut]]
+key = "Ctrl+Shift+T"
+command = "alacritty"         # spawn a detached program…
+args = ["-e", "htop"]
+
+[[shortcut]]
+key = "Ctrl+N"
+shell = "notify-send hi"      # …or a shell one-liner
+```
+
+```rust
+let sel = Modal::new("Launcher")
+    .option(ModalOption::new("ff", "Firefox").command("firefox"))
+    .shortcuts_file("~/.config/r-modals/shortcuts.toml") // or .shortcuts_toml("…")
+    .run();
+```
+
+Shortcut keys are consumed before the built-in keys (so they can rebind `Enter`), and `option` shortcuts render as the row hint automatically. A missing/invalid file makes `run()` return `ModalError::Shortcuts`. CLI: `r-modals --dmenu --shortcuts FILE` (or `--no-shortcuts` to skip the default file). See `examples/assets/shortcuts.toml` for the full reference.
+
+## Prefixes
+
+Bind the start of the query to an action. Type the prefix and press `Enter`: the action runs with the rest of the query (the *remainder*) and the modal closes without a pick.
+
+```toml
+# ~/.config/r-modals/prefixes.toml  (auto-loaded when present)
+[[prefix]]
+prefix = ">"
+command = "notify-send"        # spawn a detached program…
+args = ["r-modals", "{query}"]
+
+[[prefix]]
+prefix = "?"
+shell = "xdg-open https://duckduckgo.com/?q={query}"  # …or a shell one-liner
+hint = "Web search"
+```
+
+```rust
+let sel = Modal::new("Launcher")
+    .option(ModalOption::new("ff", "Firefox").command("firefox"))
+    .prefixes_file("~/.config/r-modals/prefixes.toml") // or .prefixes_toml("…")
+    .run();
+```
+
+A prefix can also run a Rust closure via `Modal::prefix_action(prefix, SelectAction::Callback(..))`; the closure reads the remainder from `selection.query`.
+
+`{query}` is replaced by the remainder. In `shell` it is inserted shell-quoted (don't wrap it in quotes yourself); when an action sets no `{query}` the remainder is appended — a trailing argument for `command`, a single quoted word for `shell`. A bare prefix (empty remainder) still runs its action, and the longest matching prefix wins (`>>` beats `>`). A missing/invalid file makes `run()` return `ModalError::Prefixes`. CLI: `r-modals --dmenu --prefixes FILE` (or `--no-prefixes` to skip the default file). See `examples/assets/prefixes.toml` for the full reference.
+
 ## Dialogs
 
 ```rust
@@ -82,7 +141,7 @@ modal { width: 560px; border-radius: 12px; }
 search { background: #222228; color: #f0f0f5; }
 ```
 
-See `assets/theme.css` and `assets/themes/` for starting points.
+See `examples/assets/theme.css` (an example stylesheet) and `assets/themes/` (the built-in themes) for starting points.
 
 ## Examples
 
@@ -90,6 +149,8 @@ See `assets/theme.css` and `assets/themes/` for starting points.
 cargo run --example basic    # minimal picker
 cargo run --example search   # filtering + picker extras (--fuzzy/--multi flags)
 cargo run --example menus    # submenus + actions (command/shell/closure)
+cargo run --example shortcuts # file-configured keyboard shortcuts
+cargo run --example prefixes  # query prefixes that run an action on Enter
 cargo run --example gallery  # icons + List/Grid layouts + CSS themes (--grid)
 cargo run --example dialogs  # Confirm + Prompt
 cargo run --bin r-modals -- ~/Pictures/wallpapers

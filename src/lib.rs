@@ -24,6 +24,9 @@
 //! - [`ModalOption`] / [`IconSource`] — options + images.
 //! - [`SearchConfig`] + [`filter_options`] — testable filtering logic.
 //! - [`Theme`] / [`Position`] / [`Layout`] — customization.
+//! - [`ShortcutSpec`] — file-configurable key bindings ([`Modal::shortcuts_file`]).
+//! - [`PrefixSpec`] — query prefixes that run an action on confirm
+//!   ([`Modal::prefixes_file`]).
 //! - [`Confirm`] / [`Prompt`] — one-shot dialogs built on the same backend.
 //! - [`ModalError`] — typed errors from [`Modal::run`].
 //!
@@ -35,10 +38,6 @@
 //! This approximates on X11/Wayland without requiring
 //! compositor-specific layer-shell protocols.
 
-// Headless harness helpers live next to the code they test, so test
-// modules sit mid-file by design.
-#![allow(clippy::items_after_test_module)]
-
 mod app;
 mod confirm;
 mod css;
@@ -46,8 +45,10 @@ mod error;
 mod modal;
 mod multi;
 mod option;
+mod prefix;
 mod prompt;
 mod search;
+mod shortcut;
 mod theme;
 
 pub use confirm::Confirm;
@@ -55,6 +56,8 @@ pub use error::ModalError;
 pub use modal::{Modal, ModalSelection};
 pub use multi::{run_multi, MultiSelection};
 pub use option::{ErrorAction, IconSource, ModalOption, SelectAction};
+pub use prefix::{default_prefixes_path, load_prefixes_file, parse_prefixes, PrefixSpec};
 pub use prompt::Prompt;
 pub use search::{filter_options, filter_options_with, fuzzy_score, SearchConfig};
+pub use shortcut::{default_shortcuts_path, load_shortcuts_file, parse_shortcuts, ShortcutSpec};
 pub use theme::{Layout, Position, Theme};

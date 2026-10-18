@@ -1,0 +1,35 @@
+# r-modals keyboard shortcuts
+#
+# Copy this file to  ~/.config/r-modals/shortcuts.toml  and r-modals loads it
+# automatically (see `Modal::auto_shortcuts`, on by default). Point an explicit
+# file at it with `Modal::shortcuts_file(path)` or `r-modals --dmenu --shortcuts
+# FILE`.
+#
+# Each [[shortcut]] binds one key combo to exactly one of:
+#   option  = "<id>"          activate that option (drill / pick + fire action)
+#   command = "<prog>"        spawn a detached program (optional `args = [..]`)
+#   shell   = "<one-liner>"   run a detached shell command (sh -c / cmd /C)
+#
+# Optional:
+#   hint = "..."              override the hint shown on the bound row
+#
+# The key combo's final part is the key (O, F5, Enter, Space, PageDown, …);
+# preceding parts are modifiers: Ctrl/Control, Shift, Alt/Option/Opt,
+# Super/Cmd/Command/Meta/Win. Shortcut keys are consumed before the built-in
+# modal keys, so a file can rebind them.
+
+# Activate an existing option by id.
+[[shortcut]]
+key = "Ctrl+O"
+option = "ff"
+
+# Spawn a program with arguments.
+[[shortcut]]
+key = "Ctrl+Shift+T"
+command = "alacritty"
+args = ["-e", "htop"]
+
+# Run a shell one-liner.
+[[shortcut]]
+key = "Ctrl+N"
+shell = "notify-send 'r-modals' 'shortcut fired'"

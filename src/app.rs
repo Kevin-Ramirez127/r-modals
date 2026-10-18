@@ -1,3 +1,6 @@
+use crate::option::find_option_path;
+use crate::prefix::{self, CompiledPrefix};
+use crate::shortcut::ShortcutTarget;
 use crate::{IconSource, Layout, Modal, ModalOption, ModalSelection};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -330,6 +333,105 @@ impl ModalApp {
             query: self.query.clone(),
             custom_input: false,
         }))
+    }
+
+    /// Activate the option at `path`: drill into a submenu, or pick a leaf.
+    /// Used by file-configured shortcuts that target an option id.
+    fn activate_path(&mut self, path: &[usize], ctx: &egui::Context) {
+        let Some((&last, prefix)) = path.split_last() else {
+            return;
+        };
+        // Move to the level that owns the target.
+        self.nav_path = prefix.to_vec();
+        self.after_nav_change();
+        let info = self.level_opt(last).map(|o| {
+            (
+                o.has_children(),
+                o.activatable(),
+                o.id.clone(),
+                o.label.clone(),
+            )
+        });
+        match info {
+            Some((true, _, _, _)) => self.enter_level(last),
+            Some((false, true, id, label)) => self.finish(
+                Some(ModalSelection {
+                    id,
+                    label,
+                    index: last,
+                    path: path.to_vec(),
+                    query: self.query.clone(),
+                    custom_input: false,
+                }),
+                ctx,
+            ),
+            _ => {}
+        }
+    }
+
+    /// Fire a watched prefix's action with the query remainder, returning the
+    /// selection handed to the action (the modal then closes with no pick).
+    /// Split out so it is testable without a display.
+    fn run_prefix(cp: &CompiledPrefix, rest: &str, nav_path: &[usize]) -> ModalSelection {
+        let sel = ModalSelection {
+            id: cp.prefix.clone(),
+            label: cp.hint.clone(),
+            index: 0,
+            path: nav_path.to_vec(),
+            query: rest.to_string(),
+            custom_input: true,
+        };
+        let _ = cp.execute(&sel, rest);
+        sel
+    }
+
+    /// Consume a bound shortcut key, if one was pressed this frame, and act on
+    /// it. Returns true when a shortcut fired (the caller then stops handling
+    /// the frame's other keys).
+    fn fire_shortcut(&mut self, ctx: &egui::Context) -> bool {
+        if self.modal.compiled_shortcuts.is_empty() {
+            return false;
+        }
+        // One input lock for the whole keymap; `consume_key` matches logically
+        // and `compiled_shortcuts` is ordered most-specific-first, so
+        // `Ctrl+Shift+S` is seen before `Ctrl+S`.
+        let mut pressed: Option<usize> = None;
+        {
+            let shortcuts = &self.modal.compiled_shortcuts;
+            ctx.input_mut(|i| {
+                for (idx, sc) in shortcuts.iter().enumerate() {
+                    if i.consume_key(sc.modifiers, sc.key) {
+                        pressed = Some(idx);
+                        break;
+                    }
+                }
+            });
+        }
+        let Some(idx) = pressed else {
+            return false;
+        };
+        match self.modal.compiled_shortcuts[idx].target.clone() {
+            ShortcutTarget::Option(id) => {
+                if let Some(path) = find_option_path(&self.modal.options, &id) {
+                    self.activate_path(&path, ctx);
+                }
+            }
+            ShortcutTarget::Action(action) => {
+                // Standalone commands have no row to land on: run the action
+                // (best-effort, detached) and close with no pick.
+                let sel = ModalSelection {
+                    id: "shortcut".to_string(),
+                    label: self.modal.compiled_shortcuts[idx].hint.clone(),
+                    index: 0,
+                    path: Vec::new(),
+                    query: String::new(),
+                    custom_input: false,
+                };
+                let _ = action.execute(&sel);
+                self.finish(None, ctx);
+            }
+        }
+        true
     }
 
     fn finish(&self, sel: Option<ModalSelection>, ctx: &egui::Context) {
@@ -806,726 +908,6 @@ fn decode_bytes(bytes: &[u8]) -> Option<egui::ColorImage> {
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn decode_valid_png() {
-        let bytes = include_bytes!("../assets/firefox.png");
-        assert!(decode_bytes(bytes).is_some());
-        let img = decode_bytes(bytes).unwrap();
-        assert!(img.width() > 0 && img.height() > 0);
-    }
-
-    #[test]
-    fn decode_invalid_bytes_returns_none() {
-        assert!(decode_bytes(b"not an image").is_none());
-        assert!(decode_bytes(include_bytes!("../README.md")).is_none());
-    }
-
-    #[test]
-    fn load_icon_variants() {
-        // File (ships with repo)
-        assert!(load_icon(&IconSource::File("assets/firefox.png".into())).is_some());
-        // Missing file -> None (graceful)
-        assert!(load_icon(&IconSource::File("assets/does-not-exist.png".into())).is_none());
-        // Bytes
-        let bytes = include_bytes!("../assets/terminal.png").to_vec();
-        assert!(load_icon(&IconSource::Bytes(bytes)).is_some());
-        assert!(load_icon(&IconSource::Bytes(b"junk".to_vec())).is_none());
-        // Pixels: valid + length mismatch
-        assert!(load_icon(&IconSource::Pixels {
-            width: 2,
-            height: 2,
-            rgba: vec![255; 2 * 2 * 4],
-        })
-        .is_some());
-        assert!(load_icon(&IconSource::Pixels {
-            width: 2,
-            height: 2,
-            rgba: vec![255; 3],
-        })
-        .is_none());
-        assert!(load_icon(&IconSource::None).is_none());
-    }
-
-    fn headless_input(time: f64) -> egui::RawInput {
-        headless_input_w(time, 600.0)
-    }
-
-    fn headless_input_w(time: f64, width: f32) -> egui::RawInput {
-        egui::RawInput {
-            screen_rect: Some(egui::Rect::from_min_size(
-                egui::Pos2::ZERO,
-                egui::vec2(width, 500.0),
-            )),
-            time: Some(time),
-            ..Default::default()
-        }
-    }
-
-    fn key_event(key: egui::Key) -> egui::Event {
-        egui::Event::Key {
-            key,
-            physical_key: None,
-            pressed: true,
-            repeat: false,
-            modifiers: egui::Modifiers::NONE,
-        }
-    }
-
-    /// egui mechanism check with the same nesting as `show_grid`:
-    /// `scroll_to_me(Center)` must bring an off-screen tile to the center.
-    #[test]
-    fn scroll_to_me_centers_grid_tile() {
-        let ctx = egui::Context::default();
-        let mut tile_rect = egui::Rect::NOTHING;
-        let mut inner_rect = egui::Rect::NOTHING;
-        let mut offset = egui::Vec2::ZERO;
-        let mut content = egui::Vec2::ZERO;
-        for pass in 0..10 {
-            // Large time steps so the scroll animation completes.
-            let t = pass as f64 * 0.25;
-            let _ = ctx.run(headless_input(t), |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
-                    let mut wanted = egui::Rect::NOTHING;
-                    let out = egui::ScrollArea::vertical()
-                        .max_height(200.0)
-                        .auto_shrink([false, true])
-                        .show(ui, |ui| {
-                            egui::Grid::new("test-tiles")
-                                .num_columns(4)
-                                .spacing([4.0, 4.0])
-                                .show(ui, |ui| {
-                                    for i in 0..30 {
-                                        let r = egui::Frame::new()
-                                            .inner_margin(4.0)
-                                            .show(ui, |ui| {
-                                                ui.set_min_size(egui::Vec2::splat(64.0));
-                                                ui.set_max_size(egui::Vec2::splat(64.0));
-                                                ui.label(format!("tile {i}"));
-                                            })
-                                            .response;
-                                        if pass == 1 && i == 15 {
-                                            r.scroll_to_me(Some(egui::Align::Center));
-                                        }
-                                        if pass == 9 && i == 15 {
-                                            wanted = r.rect;
-                                        }
-                                        if (i + 1) % 4 == 0 {
-                                            ui.end_row();
-                                        }
-                                    }
-                                });
-                        });
-                    if pass == 9 {
-                        tile_rect = wanted;
-                        inner_rect = out.inner_rect;
-                        offset = out.state.offset;
-                        content = out.content_size;
-                    }
-                });
-            });
-        }
-        assert!(
-            content.y > inner_rect.height(),
-            "need overflow for this test, content={content:?} inner={inner_rect:?}"
-        );
-        assert!(offset.y > 0.0, "expected scroll, offset={offset:?}");
-        let tile_c = tile_rect.center().y;
-        let view_c = inner_rect.center().y;
-        // egui keeps a few px of internal inset, so exact equality is too
-        // strict; anything well under half a tile proves centering.
-        assert!(
-            (tile_c - view_c).abs() < 8.0,
-            "tile not centered: tile_c={tile_c} view_c={view_c}"
-        );
-    }
-
-    fn grid_app(n: usize, center: bool) -> (egui::Context, ModalApp, eframe::Frame) {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("grid")
-            .layout(crate::Layout::Grid)
-            .center_on_navigate(center)
-            .options((0..n).map(|i| {
-                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
-                    8,
-                    8,
-                    vec![200; 8 * 8 * 4],
-                )
-            }));
-        let result = Arc::new(Mutex::new(None));
-        let app = ModalApp::new(&cc, modal, result);
-        let frame = eframe::Frame::_new_kittest();
-        (ctx, app, frame)
-    }
-
-    /// Drive the real app headlessly: arrows must move the cursor even with
-    /// the search field focused, and the grid must scroll to follow.
-    /// Grid Down moves a full row (clamped at the end).
-    #[test]
-    fn keyboard_navigation_centers_selected_tile() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = grid_app(30, true);
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        assert_eq!(app.cursor, 0);
-        let cols = app.last_columns;
-        assert!(cols >= 2, "need multiple columns for this test");
-        for _ in 0..8 {
-            t += 1.0 / 60.0;
-            let mut inp = headless_input(t);
-            inp.events.push(key_event(egui::Key::ArrowDown));
-            let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        }
-        assert_eq!(app.cursor, (8 * cols).min(29));
-        assert!(
-            app.last_scroll_offset.y > 0.0,
-            "expected grid to scroll on keyboard nav, offset={:?}",
-            app.last_scroll_offset
-        );
-    }
-
-    /// Opt-out: no auto-scroll when disabled.
-    #[test]
-    fn center_on_navigate_false_keeps_scroll() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = grid_app(30, false);
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        let cols = app.last_columns;
-        for _ in 0..8 {
-            t += 1.0 / 60.0;
-            let mut inp = headless_input(t);
-            inp.events.push(key_event(egui::Key::ArrowDown));
-            let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        }
-        assert_eq!(app.cursor, (8 * cols).min(29));
-        assert_eq!(app.last_scroll_offset, egui::Vec2::ZERO);
-    }
-
-    fn inner_sizes(out: &egui::FullOutput) -> Vec<egui::Vec2> {
-        out.viewport_output
-            .get(&egui::ViewportId::ROOT)
-            .map(|vo| {
-                vo.commands
-                    .iter()
-                    .filter_map(|c| match c {
-                        egui::ViewportCommand::InnerSize(s) => Some(*s),
-                        _ => None,
-                    })
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    /// Fit off (default): no resize commands are ever sent.
-    #[test]
-    fn fit_width_off_sends_no_resize() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = grid_app(30, true);
-        let mut t = 0.0;
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-            sizes.extend(inner_sizes(&out));
-        }
-        assert!(sizes.is_empty(), "unexpected resize: {sizes:?}");
-    }
-
-    /// Fit on: a narrow grid shrinks the window below the theme width.
-    #[test]
-    fn fit_width_shrinks_window_to_content() {
-        use eframe::App as _;
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("fit")
-            .layout(crate::Layout::Grid)
-            .fit_width_to_content(true)
-            .theme(crate::Theme::from_css("tile { width: 200px; height: 200px; }").unwrap())
-            .options((0..2).map(|i| {
-                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
-                    8,
-                    8,
-                    vec![200; 8 * 8 * 4],
-                )
-            }));
-        let result = Arc::new(Mutex::new(None));
-        let mut app = ModalApp::new(&cc, modal, result);
-        let mut frame = eframe::Frame::_new_kittest();
-        let mut t = 0.0;
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-            sizes.extend(inner_sizes(&out));
-        }
-        assert!(!sizes.is_empty(), "expected an InnerSize command");
-        let w = sizes.last().unwrap().x;
-        assert!(
-            (320.0..560.0).contains(&w),
-            "expected shrink-to-fit width, got {w}"
-        );
-    }
-
-    /// Fit must ignore the transient first-pass measurement: multi-pass
-    /// layout reports a narrow width before settling. Regression test:
-    /// no resize below the settled width may ever be sent.
-    #[test]
-    fn fit_ignores_transient_first_pass() {
-        use eframe::App as _;
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("Pick an image")
-            .layout(crate::Layout::Grid)
-            .fit_width_to_content(true)
-            .theme(
-                crate::Theme::from_css(
-                    "modal { width: 560px; border-radius: 12px; }
-                     tile { width: 128px; height: 128px; }",
-                )
-                .unwrap(),
-            )
-            .options((0..6).map(|i| {
-                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
-                    8,
-                    8,
-                    vec![200; 8 * 8 * 4],
-                )
-            }));
-        let result = Arc::new(Mutex::new(None));
-        let mut app = ModalApp::new(&cc, modal, result);
-        let mut frame = eframe::Frame::_new_kittest();
-        let mut t = 0.0;
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-            sizes.extend(inner_sizes(&out));
-        }
-        assert!(!sizes.is_empty(), "expected an InnerSize command");
-        for s in &sizes {
-            assert!(
-                s.x >= 400.0,
-                "transient narrow resize must never be sent: {sizes:?}"
-            );
-        }
-    }
-
-    /// Hover follows fresh mouse movement…
-    #[test]
-    fn hover_follows_fresh_movement() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = grid_app(30, true);
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        // Arrow away from tile 0 with no mouse involved.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowRight));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.cursor, 1);
-        // Moving the pointer onto tile 0 takes the cursor back.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events
-            .push(egui::Event::PointerMoved(egui::Pos2::new(80.0, 130.0)));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.cursor, 0);
-    }
-
-    fn fit_grid_app() -> (egui::Context, ModalApp, eframe::Frame) {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("grid")
-            .layout(crate::Layout::Grid)
-            .fit_width_to_content(true)
-            .options((0..30).map(|i| {
-                crate::ModalOption::new(format!("id{i}"), format!("Item {i}")).icon_pixels(
-                    8,
-                    8,
-                    vec![200; 8 * 8 * 4],
-                )
-            }));
-        let result = Arc::new(Mutex::new(None));
-        let app = ModalApp::new(&cc, modal, result);
-        let frame = eframe::Frame::_new_kittest();
-        (ctx, app, frame)
-    }
-
-    /// Regression: filtering a fit-to-content grid must not shrink the
-    /// window, and clearing the filter must restore the initial columns.
-    /// Previously the window shrank to the filtered content, recomputed
-    /// e.g. 2 columns, and the narrow window trapped the restored full
-    /// list in that 2-column grid.
-    #[test]
-    fn grid_filter_keeps_window_and_restores_columns() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = fit_grid_app();
-        let mut t = 0.0;
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        let initial = app.last_columns;
-        assert!(initial >= 2, "need multiple columns, got {initial}");
-        let settled = app.last_sent_width;
-        assert!(settled > 0.0, "expected the fit window to settle");
-        // Filter down to a single tile ("Item 29" matches nothing else).
-        app.query = "Item 29".to_string();
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-            sizes.extend(inner_sizes(&out));
-        }
-        assert_eq!(app.filter_visible.len(), 1);
-        assert_eq!(
-            app.last_columns, initial,
-            "columns must not collapse while filtered"
-        );
-        for s in &sizes {
-            assert!(
-                s.x >= settled - 1.0,
-                "filter must not shrink the window: settled={settled} sizes={sizes:?}"
-            );
-        }
-        // Clearing the filter restores the full grid at its initial width.
-        app.query.clear();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        assert_eq!(app.filter_visible.len(), 30);
-        assert_eq!(
-            app.last_columns, initial,
-            "clearing the filter must restore the initial columns"
-        );
-    }
-
-    /// While filtered, the grid reuses the remembered full-list columns
-    /// even if the available width narrows (e.g. the fitted window was
-    /// briefly narrow): the layout must not get stuck at 2 columns.
-    #[test]
-    fn grid_reuses_initial_columns_when_narrowed_while_filtered() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = fit_grid_app();
-        let mut t = 0.0;
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        let initial = app.last_columns;
-        assert!(initial >= 2, "need multiple columns, got {initial}");
-        // Narrow viewport + active filter: columns must hold.
-        app.query = "Item 29".to_string();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input_w(t, 340.0), |ctx| {
-                app.update(ctx, &mut frame)
-            });
-        }
-        assert_eq!(
-            app.last_columns, initial,
-            "filtered grid must reuse the remembered columns"
-        );
-    }
-
-    /// Fit must retry the resize until the window actually matches: the
-    /// first `InnerSize` can be lost while the window is still mapping, and
-    /// send-once dedup then stuck the modal wide (grid centered with side
-    /// margins). Headless the window never applies it (stays 600px), so
-    /// every settled frame must re-send the same target width.
-    #[test]
-    fn fit_retries_resize_until_window_matches() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = fit_grid_app();
-        // fit_grid_app uses 112px tiles: target width is below 600px, so the
-        // (never-applied, headless) resize must be re-sent, not sent once.
-        let mut t = 0.0;
-        let mut sizes = Vec::new();
-        for _ in 0..6 {
-            t += 1.0 / 60.0;
-            let out = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-            sizes.extend(inner_sizes(&out));
-        }
-        assert!(
-            sizes.len() >= 4,
-            "expected the fit resize to be retried while unapplied, got {sizes:?}"
-        );
-        let first = sizes[0].x;
-        for s in &sizes {
-            assert!(
-                (s.x - first).abs() <= 1.0,
-                "retries must repeat the same target, got {sizes:?}"
-            );
-        }
-    }
-
-    fn nested_app() -> (egui::Context, ModalApp, eframe::Frame) {
-        let ctx = egui::Context::default();
-        let cc = eframe::CreationContext::_new_kittest(ctx.clone());
-        let modal = crate::Modal::new("settings").options([
-            crate::ModalOption::new("disp", "Display").sub_options([
-                crate::ModalOption::new("res", "Resolution").sub_options([
-                    crate::ModalOption::new("1080p", "1920×1080"),
-                    crate::ModalOption::new("4k", "3840×2160"),
-                ]),
-                crate::ModalOption::new("bright", "Brightness").sub_options([
-                    crate::ModalOption::new("bright-low", "Low"),
-                    crate::ModalOption::new("bright-high", "High"),
-                ]),
-            ]),
-            crate::ModalOption::new("snd", "Sound")
-                .sub_option(crate::ModalOption::new("vol", "Volume")),
-        ]);
-        let result = Arc::new(Mutex::new(None));
-        let app = ModalApp::new(&cc, modal, result);
-        let frame = eframe::Frame::_new_kittest();
-        (ctx, app, frame)
-    }
-
-    fn enter_event(time: f64) -> egui::RawInput {
-        let mut inp = headless_input(time);
-        inp.events.push(key_event(egui::Key::Enter));
-        inp
-    }
-
-    fn esc_event(time: f64) -> egui::RawInput {
-        let mut inp = headless_input(time);
-        inp.events.push(key_event(egui::Key::Escape));
-        inp
-    }
-
-    /// Enter on a parent drills in; Enter on a leaf picks it with the full
-    /// index path.
-    #[test]
-    fn submenu_drill_and_leaf_pick() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = nested_app();
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        assert_eq!(app.filter_visible.len(), 2);
-        // Cursor 0 = Display (parent) → drill.
-        t += 1.0 / 60.0;
-        let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0]);
-        assert!(app.query.is_empty());
-        assert_eq!(app.filter_visible.len(), 2); // Resolution, Brightness
-                                                 // Move to Brightness (1) → drill → Low/High.
-        app.cursor = 1;
-        t += 1.0 / 60.0;
-        let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0, 1]);
-        assert_eq!(app.filter_visible.len(), 2);
-        // Pick the first leaf.
-        t += 1.0 / 60.0;
-        let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
-        let sel = app.result.lock().unwrap().clone().expect("leaf picked");
-        assert_eq!(sel.id, "bright-low");
-        assert_eq!(sel.label, "Low");
-        assert_eq!(sel.index, 0);
-        assert_eq!(sel.path, vec![0, 1, 0]);
-    }
-
-    /// Esc backs out one level; Esc at the root still cancels.
-    #[test]
-    fn submenu_esc_goes_up_then_cancels() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = nested_app();
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        app.enter_level(0);
-        app.enter_level(1);
-        assert_eq!(app.nav_path, vec![0, 1]);
-        t += 1.0 / 60.0;
-        let _ = ctx.run(esc_event(t), |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0]);
-        assert!(app.result.lock().unwrap().is_none());
-        t += 1.0 / 60.0;
-        let _ = ctx.run(esc_event(t), |ctx| app.update(ctx, &mut frame));
-        assert!(app.nav_path.is_empty());
-    }
-
-    /// Backspace with an empty query backs out; with text it is left alone
-    /// for the search field (never consumed for navigation).
-    #[test]
-    fn submenu_backspace_goes_up_only_on_empty_query() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = nested_app();
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        app.enter_level(0);
-        // Non-empty query: Backspace is left for the search field — nav and
-        // query are untouched by navigation handling. (Whether the headless
-        // TextEdit itself deletes a char is egui harness behavior; the real
-        // backend edits normally. What matters here is we never consume it.)
-        app.query = "Res".to_string();
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::Backspace));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0]);
-        assert_eq!(app.query, "Res");
-        // Empty query: Backspace backs out.
-        app.query.clear();
-        app.filter_initialized = false;
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::Backspace));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert!(app.nav_path.is_empty());
-    }
-
-    /// A filtered parent acts as a gateway: it lists while a descendant
-    /// matches, and drilling into it clears the query.
-    #[test]
-    fn submenu_filter_gateway_and_drill_clears_query() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = nested_app();
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        app.query = "3840".to_string();
-        t += 1.0 / 60.0;
-        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.filter_visible, vec![0]); // Display, via 3840×2160
-        t += 1.0 / 60.0;
-        let _ = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0]);
-        assert!(app.query.is_empty());
-    }
-
-    /// Nav helpers: leaves never drill, depths jump, caches track the level.
-    #[test]
-    fn submenu_nav_helpers() {
-        let (ctx, mut app, _) = nested_app();
-        let _ = ctx;
-        assert_eq!(app.level_len(), 2);
-        app.enter_level(1); // Sound (parent) → ok
-        assert_eq!(app.nav_path, vec![1]);
-        assert_eq!(app.level_len(), 1);
-        assert_eq!(app.level_icon_keys.len(), 1);
-        assert_eq!(app.level_lowered.len(), 1);
-        app.enter_level(0); // Volume (leaf) → no-op
-        assert_eq!(app.nav_path, vec![1]);
-        assert!(app.exit_level()); // pops → true
-        assert!(app.nav_path.is_empty());
-        assert!(!app.exit_level()); // root → false
-        app.enter_level(0);
-        app.enter_level(0);
-        assert_eq!(app.nav_path, vec![0, 0]);
-        app.nav_to_depth(1);
-        assert_eq!(app.nav_path, vec![0]);
-        app.nav_to_depth(0);
-        assert!(app.nav_path.is_empty());
-        app.nav_to_depth(5); // beyond depth → no-op
-        assert!(app.nav_path.is_empty());
-        assert_eq!(
-            app.trail_labels(),
-            Vec::<String>::new(),
-            "root has no trail"
-        );
-        app.enter_level(0);
-        assert_eq!(app.trail_labels(), vec!["Display".to_string()]);
-    }
-
-    /// List arrows double as submenu navigation: Right drills into the
-    /// highlighted parent (next row on leaves), Left backs out (previous
-    /// row at the root). Grid keeps arrows as pure movement.
-    #[test]
-    fn submenu_list_arrows_navigate() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = nested_app();
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        // Cursor 0 = Display (parent): Right drills in.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowRight));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![0]);
-        assert_eq!(app.filter_visible.len(), 2);
-        // Left backs out to the root.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowLeft));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert!(app.nav_path.is_empty());
-        // At the root Left keeps its old meaning: previous row (wraps).
-        assert_eq!(app.cursor, 0);
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowLeft));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.cursor, 1);
-        // Cursor 1 = Sound (parent): Right drills in (single child).
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowRight));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![1]);
-        // On the leaf (Volume) Right steps (single row: stays, no drill).
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowRight));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.nav_path, vec![1]);
-        assert_eq!(app.cursor, 0);
-    }
-
-    #[test]
-    fn stationary_pointer_does_not_block_keyboard() {
-        use eframe::App as _;
-        let (ctx, mut app, mut frame) = grid_app(30, true);
-        let mut t = 0.0;
-        for _ in 0..3 {
-            t += 1.0 / 60.0;
-            let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
-        }
-        let cols = app.last_columns;
-        // Park the pointer over tile 0 and leave it there.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events
-            .push(egui::Event::PointerMoved(egui::Pos2::new(80.0, 130.0)));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.cursor, 0);
-        // ArrowDown with the mouse still: keyboard must win.
-        t += 1.0 / 60.0;
-        let mut inp = headless_input(t);
-        inp.events.push(key_event(egui::Key::ArrowDown));
-        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
-        assert_eq!(app.cursor, cols);
-    }
-}
-
 impl eframe::App for ModalApp {
     // Fully transparent clear: eframe's default (12,12,12,180) would leave
     // a dark veil across the transparent margin ring and rounded corners.
@@ -1534,6 +916,13 @@ impl eframe::App for ModalApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // File-configured shortcuts win over the built-in keys so a user can
+        // rebind them (e.g. make `Enter` do something else). Checked first.
+        if self.fire_shortcut(ctx) {
+            self.scroll_to_cursor = false;
+            return;
+        }
+
         let t = self.modal.theme.clone();
 
         // Global keys — consumed under a single input lock instead of one
@@ -1669,6 +1058,16 @@ impl eframe::App for ModalApp {
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
         if enter {
+            // A registered prefix confirmed with Enter runs its action and
+            // closes with no pick — this wins over option activation.
+            if let Some((cp, rest)) =
+                prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
+            {
+                let cp = cp.clone();
+                Self::run_prefix(&cp, &rest, &self.nav_path);
+                self.finish(None, ctx);
+                return;
+            }
             if visible.is_empty() {
                 // Command-palette style: return the typed text itself.
                 if self.modal.allow_custom_input && !self.query.is_empty() {
@@ -1785,6 +1184,18 @@ impl eframe::App for ModalApp {
                     self.cursor = 0;
                 }
                 ui.add_space(8.0);
+                // Active prefix: Enter runs it instead of picking a row.
+                if let Some((p, _)) =
+                    prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
+                {
+                    let hint = p.hint.clone();
+                    ui.label(
+                        egui::RichText::new(format!("↵ run \"{hint}\""))
+                            .size(t.font_size * 0.8)
+                            .color(t.dim_text),
+                    );
+                    ui.add_space(6.0);
+                }
             } else if self.modal.search.autofocus && !self.focused_once {
                 // No search field: nothing to focus; mark done so we don't retry.
                 self.focused_once = true;
@@ -1890,3 +1301,6 @@ impl eframe::App for ModalApp {
         // `load_texture` completes.
     }
 }
+
+#[cfg(test)]
+mod tests;

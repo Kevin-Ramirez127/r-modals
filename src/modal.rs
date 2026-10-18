@@ -1,4 +1,10 @@
-use crate::{filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, Theme};
+use crate::option::{find_option_path, option_at_mut};
+use crate::prefix::{self, CompiledPrefix, PrefixSource, PrefixSpec};
+use crate::shortcut::{self, CompiledShortcut, ShortcutSource, ShortcutSpec, ShortcutTarget};
+use crate::{
+    filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, SelectAction,
+    Theme,
+};
 use std::sync::{Arc, Mutex};
 
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
@@ -55,6 +61,22 @@ pub struct Modal {
     pub(crate) max_results: Option<usize>,
     pub(crate) fonts: Vec<(String, Vec<u8>)>,
     pub(crate) history_file: Option<String>,
+    /// File / inline / programmatic shortcut declarations, resolved by
+    /// [`Modal::resolve_shortcuts`] at the start of [`Modal::run`].
+    pub(crate) shortcut_sources: Vec<ShortcutSource>,
+    /// Validated shortcuts the app matches against keyboard input.
+    pub(crate) compiled_shortcuts: Vec<CompiledShortcut>,
+    /// Load [`crate::default_shortcuts_path`] when present and no explicit
+    /// source was given. Defaults to `true`.
+    pub(crate) auto_shortcuts: bool,
+    /// File / inline / programmatic prefix declarations, resolved by
+    /// [`Modal::resolve_prefixes`] at the start of [`Modal::run`].
+    pub(crate) prefix_sources: Vec<PrefixSource>,
+    /// Validated prefixes the app matches against the query.
+    pub(crate) compiled_prefixes: Vec<CompiledPrefix>,
+    /// Load [`crate::default_prefixes_path`] when present and no explicit
+    /// source was given. Defaults to `true`.
+    pub(crate) auto_prefixes: bool,
 }
 
 impl Modal {
@@ -81,6 +103,12 @@ impl Modal {
             max_results: None,
             fonts: Vec::new(),
             history_file: None,
+            shortcut_sources: Vec::new(),
+            compiled_shortcuts: Vec::new(),
+            auto_shortcuts: true,
+            prefix_sources: Vec::new(),
+            compiled_prefixes: Vec::new(),
+            auto_prefixes: true,
         }
     }
 
@@ -291,6 +319,211 @@ impl Modal {
         self
     }
 
+    /// Load keyboard shortcuts from a TOML file (format documented on
+    /// [`crate::ShortcutSpec`]).
+    ///
+    /// Shortcut keys are consumed before the built-in modal keys, so a file
+    /// can override them (e.g. rebind `Enter`). A missing or invalid file
+    /// makes [`Modal::run`] return [`ModalError::Shortcuts`].
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .shortcuts_file("~/.config/r-modals/shortcuts.toml")
+    ///     .run();
+    /// ```
+    pub fn shortcuts_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.shortcut_sources
+            .push(ShortcutSource::File(path.into()));
+        self
+    }
+
+    /// Define keyboard shortcuts from inline TOML (same format as
+    /// [`Modal::shortcuts_file`]).
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .shortcuts_toml("[[shortcut]]\nkey = \"Ctrl+O\"\noption = \"ff\"\n")
+    ///     .run();
+    /// ```
+    pub fn shortcuts_toml(mut self, toml: impl Into<String>) -> Self {
+        self.shortcut_sources
+            .push(ShortcutSource::Toml(toml.into()));
+        self
+    }
+
+    /// Add one shortcut programmatically (see [`crate::ShortcutSpec`]).
+    pub fn shortcut(mut self, spec: ShortcutSpec) -> Self {
+        self.shortcut_sources.push(ShortcutSource::Spec(spec));
+        self
+    }
+
+    /// Toggle auto-loading [`crate::default_shortcuts_path`] when it exists and
+    /// no explicit shortcut source was added. Defaults to `true`.
+    pub fn auto_shortcuts(mut self, yes: bool) -> Self {
+        self.auto_shortcuts = yes;
+        self
+    }
+
+    /// Load query prefixes from a TOML file (format documented on
+    /// [`crate::PrefixSpec`]).
+    ///
+    /// A registered prefix at the start of the query, confirmed with `Enter`,
+    /// runs its action and closes the modal without returning a pick. A
+    /// missing or invalid file makes [`Modal::run`] return
+    /// [`ModalError::Prefixes`].
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .prefixes_file("~/.config/r-modals/prefixes.toml")
+    ///     .run();
+    /// ```
+    pub fn prefixes_file(mut self, path: impl Into<std::path::PathBuf>) -> Self {
+        self.prefix_sources.push(PrefixSource::File(path.into()));
+        self
+    }
+
+    /// Define query prefixes from inline TOML (same format as
+    /// [`Modal::prefixes_file`]).
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let sel = Modal::new("Launcher")
+    ///     .prefixes_toml("[[prefix]]\nprefix = \">\"\nshell = \"notify-send {query}\"\n")
+    ///     .run();
+    /// ```
+    pub fn prefixes_toml(mut self, toml: impl Into<String>) -> Self {
+        self.prefix_sources.push(PrefixSource::Toml(toml.into()));
+        self
+    }
+
+    /// Add one prefix programmatically (see [`crate::PrefixSpec`]).
+    pub fn prefix(mut self, spec: PrefixSpec) -> Self {
+        self.prefix_sources.push(PrefixSource::Spec(spec));
+        self
+    }
+
+    /// Add one prefix bound to a prebuilt [`SelectAction`] — including a Rust
+    /// closure ([`SelectAction::Callback`]), which TOML cannot express. The
+    /// closure receives the query remainder as `selection.query`.
+    ///
+    /// ```no_run
+    /// use r_modals::{Modal, SelectAction};
+    /// let sel = Modal::new("Launcher")
+    ///     .prefix_action(">", SelectAction::Callback(std::sync::Arc::new(|s| {
+    ///         println!("run: {}", s.query);
+    ///     })))
+    ///     .run();
+    /// ```
+    pub fn prefix_action(mut self, prefix: impl Into<String>, action: SelectAction) -> Self {
+        let prefix = prefix.into();
+        self.prefix_sources
+            .push(PrefixSource::Compiled(CompiledPrefix {
+                hint: prefix.clone(),
+                prefix,
+                action,
+            }));
+        self
+    }
+
+    /// Toggle auto-loading [`crate::default_prefixes_path`] when it exists and
+    /// no explicit prefix source was added. Defaults to `true`.
+    pub fn auto_prefixes(mut self, yes: bool) -> Self {
+        self.auto_prefixes = yes;
+        self
+    }
+
+    /// Read and validate every shortcut source into `compiled_shortcuts`, and
+    /// auto-fill the matching rows' shortcut hints. Split out of
+    /// [`Modal::run`] so it is testable without a display.
+    pub(crate) fn resolve_shortcuts(&mut self) -> Result<(), ModalError> {
+        let mut specs: Vec<ShortcutSpec> = Vec::new();
+        for source in &self.shortcut_sources {
+            match source {
+                ShortcutSource::File(p) => {
+                    specs.extend(shortcut::load_shortcuts_file(p).map_err(ModalError::Shortcuts)?)
+                }
+                ShortcutSource::Toml(s) => {
+                    specs.extend(shortcut::parse_shortcuts(s).map_err(ModalError::Shortcuts)?)
+                }
+                ShortcutSource::Spec(s) => specs.push(s.clone()),
+            }
+        }
+        // Default file is a fallback only: never mixed with explicit sources.
+        if specs.is_empty() && self.shortcut_sources.is_empty() && self.auto_shortcuts {
+            if let Some(path) = shortcut::default_shortcuts_path() {
+                if path.is_file() {
+                    specs = shortcut::load_shortcuts_file(&path).map_err(ModalError::Shortcuts)?;
+                }
+            }
+        }
+        let mut compiled = shortcut::compile_all(&specs).map_err(ModalError::Shortcuts)?;
+        // An `option` shortcut whose id is absent would be a dead key: drop it.
+        compiled.retain(|c| match &c.target {
+            ShortcutTarget::Option(id) => find_option_path(&self.options, id).is_some(),
+            ShortcutTarget::Action(_) => true,
+        });
+        // Surface the binding on the row unless it already declares one.
+        for c in &compiled {
+            if let ShortcutTarget::Option(id) = &c.target {
+                if let Some(path) = find_option_path(&self.options, id) {
+                    if let Some(opt) = option_at_mut(&mut self.options, &path) {
+                        if opt.shortcut.is_none() {
+                            opt.shortcut = Some(c.hint.clone());
+                        }
+                    }
+                }
+            }
+        }
+        self.compiled_shortcuts = compiled;
+        Ok(())
+    }
+
+    /// Read and validate every prefix source into `compiled_prefixes`. Split
+    /// out of [`Modal::run`] so it is testable without a display.
+    pub(crate) fn resolve_prefixes(&mut self) -> Result<(), ModalError> {
+        let mut compiled: Vec<CompiledPrefix> = Vec::new();
+        let mut explicit = false;
+        for source in &self.prefix_sources {
+            explicit = true;
+            match source {
+                PrefixSource::File(p) => {
+                    let specs = prefix::load_prefixes_file(p).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Toml(s) => {
+                    let specs = prefix::parse_prefixes(s).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Spec(s) => {
+                    compiled.push(prefix::compile(s).map_err(ModalError::Prefixes)?);
+                }
+                PrefixSource::Compiled(c) => {
+                    if c.prefix.trim().is_empty() {
+                        return Err(ModalError::Prefixes(
+                            "prefix entry has an empty prefix".to_string(),
+                        ));
+                    }
+                    compiled.push(c.clone());
+                }
+            }
+        }
+        // Default file is a fallback only: never mixed with explicit sources.
+        if !explicit && self.auto_prefixes {
+            if let Some(path) = prefix::default_prefixes_path() {
+                if path.is_file() {
+                    let specs = prefix::load_prefixes_file(&path).map_err(ModalError::Prefixes)?;
+                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                }
+            }
+        }
+        prefix::sort_longest_first(&mut compiled);
+        self.compiled_prefixes = compiled;
+        Ok(())
+    }
+
     /// Filter without opening a window (useful for tests / headless use).
     pub fn filtered_indices(&self, query: &str) -> Vec<usize> {
         if !self.search.enabled {
@@ -414,6 +647,10 @@ impl Modal {
     /// [`ModalOption::shell`], [`ModalOption::on_select`]), it fires here —
     /// once, on the calling thread, after the window closes. A failing
     /// spawn fires the option's [`ModalOption::on_error`] fallback instead.
+    ///
+    /// A registered query prefix confirmed with `Enter` (see
+    /// [`Modal::prefixes_file`]) runs its action inside the window and closes
+    /// with `Ok(None)` — there is no row to return.
     pub fn run(self) -> Result<Option<ModalSelection>, ModalError> {
         if self.options.is_empty() {
             return Err(ModalError::NoOptions);
@@ -422,6 +659,8 @@ impl Modal {
         let actions = self.collect_actions();
         let mut modal = self;
         modal.apply_history();
+        modal.resolve_shortcuts()?;
+        modal.resolve_prefixes()?;
         modal.theme = modal.resolved_theme()?;
         let history_file = modal.history_file.clone();
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
@@ -506,194 +745,4 @@ impl Modal {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn center_on_navigate_defaults_on_and_is_settable() {
-        assert!(Modal::new("x").center_on_navigate);
-        assert!(!Modal::new("x").center_on_navigate(false).center_on_navigate);
-    }
-
-    #[test]
-    fn fit_width_defaults_off_and_is_settable() {
-        assert!(!Modal::new("x").fit_width_to_content);
-        assert!(
-            Modal::new("x")
-                .fit_width_to_content(true)
-                .fit_width_to_content
-        );
-    }
-
-    #[test]
-    fn collect_actions_walks_nested_paths() {
-        let m = Modal::new("x")
-            .option(ModalOption::new("a", "A").command("echo-a"))
-            .option(ModalOption::new("p", "Parent").sub_options([
-                ModalOption::new("b", "B"),
-                ModalOption::new("c", "C").shell("echo-c"),
-            ]));
-        let actions = m.collect_actions();
-        assert_eq!(actions.len(), 2);
-        assert_eq!(actions[0].0, vec![0]);
-        assert!(matches!(actions[0].1, crate::SelectAction::Command { .. }));
-        assert_eq!(actions[1].0, vec![1, 1]);
-        assert!(matches!(actions[1].1, crate::SelectAction::Shell(_)));
-    }
-
-    #[test]
-    fn dispatch_action_falls_back_on_spawn_failure() {
-        use std::sync::{Arc, Mutex};
-        let sel = ModalSelection {
-            id: "bad".to_string(),
-            label: "Bad".to_string(),
-            index: 0,
-            path: vec![0],
-            query: String::new(),
-            custom_input: false,
-        };
-        // No panic without a handler either.
-        let bare = Modal::new("y")
-            .option(ModalOption::new("bad", "Bad").command("definitely-not-a-real-binary"));
-        let bare_actions = bare.collect_actions();
-        Modal::dispatch_action(&bare_actions, &sel);
-
-        // With a handler: it fires exactly once, with the pick and the error.
-        let fired = Arc::new(Mutex::new(Vec::new()));
-        let fired2 = fired.clone();
-        let m2 = Modal::new("x").option(
-            ModalOption::new("bad", "Bad")
-                .command("definitely-not-a-real-binary")
-                .on_error(move |sel, err| {
-                    fired2
-                        .lock()
-                        .unwrap()
-                        .push((sel.id.clone(), err.to_string()));
-                }),
-        );
-        Modal::dispatch_action(&m2.collect_actions(), &sel);
-        let fired = fired.lock().unwrap();
-        assert_eq!(fired.len(), 1);
-        assert_eq!(fired[0].0, "bad");
-        assert!(!fired[0].1.is_empty());
-    }
-
-    #[test]
-    fn dispatch_action_skips_fallback_on_success() {
-        use std::sync::{Arc, Mutex};
-        let fired = Arc::new(Mutex::new(false));
-        let fired2 = fired.clone();
-        // Callbacks cannot spawn-fail: fallback must stay quiet.
-        let m = Modal::new("x").option(
-            ModalOption::new("ok", "Ok")
-                .on_select(|_| {})
-                .on_error(move |_, _| *fired2.lock().unwrap() = true),
-        );
-        let sel = ModalSelection {
-            id: "ok".to_string(),
-            label: "Ok".to_string(),
-            index: 0,
-            path: vec![0],
-            query: String::new(),
-            custom_input: false,
-        };
-        Modal::dispatch_action(&m.collect_actions(), &sel);
-        assert!(!*fired.lock().unwrap());
-    }
-
-    #[test]
-    fn stylesheet_override_wins_over_stylesheet_and_theme() {
-        let m = Modal::new("x")
-            .theme(Theme::from_css("modal { width: 100px; color: red; }").unwrap())
-            .stylesheet("modal { width: 200px; color: blue; }")
-            .stylesheet_override("modal { width: 300px; }");
-        let t = m.resolved_theme().unwrap();
-        // Override wins where specified…
-        assert_eq!(t.width, 300.0);
-        // …stylesheet wins where the override is silent…
-        assert_eq!(t.text, egui::Color32::from_rgb(0, 0, 255));
-        // …and a bad override errors like a bad stylesheet.
-        assert!(Modal::new("x")
-            .stylesheet_override("modal { width: 10em; }")
-            .resolved_theme()
-            .is_err());
-        // No override: previous behavior unchanged.
-        let t = Modal::new("x")
-            .stylesheet("modal { width: 200px; }")
-            .resolved_theme()
-            .unwrap();
-        assert_eq!(t.width, 200.0);
-    }
-
-    #[test]
-    fn stylesheet_layers_over_theme_and_bad_css_errors() {
-        let base = Theme::from_css("modal { width: 100px; }").unwrap();
-        let m = Modal::new("x")
-            .theme(base)
-            .stylesheet("modal { width: 200px; background: #000000; }");
-        let t = m.resolved_theme().unwrap();
-        assert_eq!(t.width, 200.0);
-        assert_eq!(t.background, egui::Color32::from_rgb(0, 0, 0));
-        // Untouched fields keep the custom theme, not the dark default.
-        assert_eq!(t.height, Theme::dark().height);
-        assert!(Modal::new("x")
-            .stylesheet("modal { width: 10px; color }")
-            .resolved_theme()
-            .is_err());
-    }
-
-    #[test]
-    fn new_builder_defaults() {
-        let m = Modal::new("x");
-        assert!(m.default_selected.is_none());
-        assert!(!m.allow_custom_input);
-        assert!(!m.multi_select);
-        assert!(m.max_results.is_none());
-        assert!(m.footer_hint.is_none());
-        assert!(m.fonts.is_empty());
-        assert!(m.history_file.is_none());
-        assert!(!m.search.fuzzy);
-        assert_eq!(m.empty_message, "No matches");
-    }
-
-    #[test]
-    fn error_converts_to_string_for_legacy_mains() {
-        let e = crate::ModalError::NoOptions;
-        let s: String = e.into();
-        assert!(s.contains("no options"));
-        assert_eq!(
-            Modal::new("x").run().unwrap_err().to_string(),
-            "r-modals: no options provided"
-        );
-    }
-
-    #[test]
-    fn max_results_truncates_filtered_indices() {
-        let m = Modal::new("x")
-            .options((0..10).map(|i| ModalOption::new(format!("id{i}"), format!("Item {i}"))))
-            .max_results(3);
-        assert_eq!(m.filtered_indices("Item").len(), 3);
-    }
-
-    #[test]
-    fn history_sorts_most_used_first() {
-        let dir = std::env::temp_dir().join(format!("qm-hist-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&dir);
-        let path = dir.join("hist.txt");
-        std::fs::write(&path, "b 5\na 1\n").unwrap();
-        let mut m = Modal::new("x")
-            .option(ModalOption::new("a", "A"))
-            .option(ModalOption::new("b", "B"))
-            .option(ModalOption::new("c", "C"))
-            .history_file(path.to_str().unwrap());
-        m.apply_history();
-        assert_eq!(m.options[0].id, "b");
-        assert_eq!(m.options[1].id, "a");
-        assert_eq!(m.options[2].id, "c");
-        m.record_history("c");
-        let counts = Modal::load_history(path.to_str().unwrap());
-        assert_eq!(counts.get("c"), Some(&1));
-        assert_eq!(counts.get("b"), Some(&5));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
+mod tests;

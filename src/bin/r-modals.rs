@@ -25,6 +25,12 @@ fn print_help() {
          \x20  --empty-message TEXT   shown when nothing matches\n\
          \x20  --max-results N        cap visible rows (best matches first)\n\
          \x20  --print-id             print option id instead of label\n\
+         \x20  --shortcuts FILE       key bindings from a TOML file (bind a key to\n\
+         \x20                         an option id, or run a command/shell)\n\
+         \x20  --no-shortcuts         don't auto-load ~/.config/r-modals/shortcuts.toml\n\
+         \x20  --prefixes FILE        query prefixes from a TOML file (type the\n\
+         \x20                         prefix, Enter runs its command/shell)\n\
+         \x20  --no-prefixes          don't auto-load ~/.config/r-modals/prefixes.toml\n\
          \x20  -h, --help             this help\n\
          \n\
          EXIT CODES\n\
@@ -33,6 +39,8 @@ fn print_help() {
          EXAMPLES\n\
          \x20  ls ~/bin | r-modals --dmenu --prompt Run\n\
          \x20  printf 'a\\nb\\nc' | r-modals --dmenu --fuzzy --multi\n\
+         \x20  ls ~/bin | r-modals --dmenu --shortcuts ~/.config/r-modals/shortcuts.toml\n\
+         \x20  ls ~/bin | r-modals --dmenu --prefixes ~/.config/r-modals/prefixes.toml\n\
          \x20  r-modals ~/Pictures/wallpapers"
     );
 }
@@ -48,14 +56,41 @@ fn is_image_file(p: &std::path::Path) -> bool {
     )
 }
 
-/// Solid-color RGBA square (no files needed).
-fn solid_icon(size: usize, rgb: [u8; 3]) -> (usize, usize, Vec<u8>) {
-    let mut rgba = Vec::with_capacity(size * size * 4);
-    for _ in 0..size * size {
-        rgba.extend_from_slice(&[rgb[0], rgb[1], rgb[2], 255]);
+/// Render monospace ASCII art into an RGBA icon: one character per cell, each
+/// expanded `scale`×`scale`, so the binary carries no image files. Non-space
+/// characters are drawn in `fg`, spaces in `bg`.
+fn ascii_icon(art: &[&str], fg: [u8; 3], bg: [u8; 3], scale: usize) -> (usize, usize, Vec<u8>) {
+    let scale = scale.max(1);
+    let rows = art.len().max(1);
+    let cols = art
+        .iter()
+        .map(|l| l.chars().count())
+        .max()
+        .unwrap_or(1)
+        .max(1);
+    let (w, h) = (cols * scale, rows * scale);
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        let line: Vec<char> = art
+            .get(y / scale)
+            .map(|l| l.chars().collect())
+            .unwrap_or_default();
+        for x in 0..w {
+            let lit = line.get(x / scale).is_some_and(|c| *c != ' ');
+            let [r, g, b] = if lit { fg } else { bg };
+            rgba.extend_from_slice(&[r, g, b, 255]);
+        }
     }
-    (size, size, rgba)
+    (w, h, rgba)
 }
+
+/// 8×4 ASCII terminal window for the built-in demo option.
+const GLYPH_TERM: [&str; 4] = ["+------+", "| >_   |", "|      |", "+------+"];
+
+/// 5×3 ASCII bitmaps for the colored swatch demo options.
+const GLYPH_R: [&str; 5] = ["## ", "# #", "## ", "# #", "# #"];
+const GLYPH_G: [&str; 5] = ["###", "#  ", "# #", "# #", "###"];
+const GLYPH_B: [&str; 5] = ["## ", "# #", "## ", "# #", "## "];
 
 #[derive(Default)]
 struct DmenuOpts {
@@ -71,6 +106,10 @@ struct DmenuOpts {
     empty_message: Option<String>,
     max_results: Option<usize>,
     print_id: bool,
+    shortcuts: Option<String>,
+    no_shortcuts: bool,
+    prefixes: Option<String>,
+    no_prefixes: bool,
 }
 
 fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>), String> {
@@ -144,6 +183,18 @@ fn run_dmenu(opts: DmenuOpts) -> i32 {
     if let Some(m) = opts.max_results {
         modal = modal.max_results(m);
     }
+    // Explicit --shortcuts FILE wins; --no-shortcuts disables the default file.
+    if let Some(path) = opts.shortcuts {
+        modal = modal.shortcuts_file(path);
+    } else if opts.no_shortcuts {
+        modal = modal.auto_shortcuts(false);
+    }
+    // Same contract for query prefixes.
+    if let Some(path) = opts.prefixes {
+        modal = modal.prefixes_file(path);
+    } else if opts.no_prefixes {
+        modal = modal.auto_prefixes(false);
+    }
     for line in &lines {
         modal = modal.option(ModalOption::new(line.clone(), line.clone()));
     }
@@ -214,17 +265,20 @@ fn run_image_demo(dir: &str) -> Result<(), String> {
             .option(ModalOption::new(format!("file:{}", path.display()), stem).icon(path.clone()));
     }
 
+    // Procedural ASCII-art icons: nothing is embedded or read from disk.
+    let (tw, th, tpx) = ascii_icon(&GLYPH_TERM, [225, 228, 235], [28, 28, 34], 4);
     modal = modal.option(
-        ModalOption::new("bytes:terminal", "Terminal (embedded)")
-            .icon(include_bytes!("../../assets/terminal.png").to_vec()),
+        ModalOption::new("icon:terminal", "Terminal (ASCII icon)")
+            .description("Procedural icon, no image file")
+            .icon_pixels(tw, th, tpx),
     );
 
-    for (name, rgb) in [
-        ("red", [200, 60, 50]),
-        ("green", [60, 170, 80]),
-        ("blue", [80, 120, 220]),
+    for (name, glyph, rgb) in [
+        ("red", &GLYPH_R, [230, 90, 80]),
+        ("green", &GLYPH_G, [80, 190, 110]),
+        ("blue", &GLYPH_B, [110, 150, 240]),
     ] {
-        let (w, h, px) = solid_icon(24, rgb);
+        let (w, h, px) = ascii_icon(glyph, rgb, [28, 28, 34], 4);
         modal = modal.option(
             ModalOption::new(format!("swatch:{name}"), format!("{name} swatch"))
                 .icon_pixels(w, h, px),
@@ -277,6 +331,10 @@ fn main() {
                 _ => bad = Some("--max-results needs a number".to_string()),
             },
             "--print-id" => opts.print_id = true,
+            "--shortcuts" => opts.shortcuts = next(&mut i),
+            "--no-shortcuts" => opts.no_shortcuts = true,
+            "--prefixes" => opts.prefixes = next(&mut i),
+            "--no-prefixes" => opts.no_prefixes = true,
             s if s.starts_with('-') => bad = Some(format!("unknown flag {s} (see --help)")),
             s => {
                 if dir.is_none() && !dmenu {
