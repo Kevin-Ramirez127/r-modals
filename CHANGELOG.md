@@ -11,6 +11,11 @@
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
 - First-query-occurrence highlight (underline, no layout shift)
 
+### Streaming options
+- `Modal::run_streaming(rx)` opens the window immediately and fills it from a
+  `Receiver<Vec<ModalOption>>`; `Modal::loading_message(text)` sets the themed
+  spinner/message shown until the first batch arrives (Esc cancels)
+
 ### Configurable shortcuts
 - File-driven key bindings: `Modal::shortcuts_file(path)`, `Modal::shortcuts_toml(text)`,
   `Modal::shortcut(spec)`; TOML `[[shortcut]]` entries bind a key to an option id, a
