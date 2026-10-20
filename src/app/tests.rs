@@ -952,3 +952,15 @@ fn streaming_disconnect_while_loading_cancels() {
     assert!(app.poll_options(&ctx));
     assert!(!app.loading);
 }
+
+#[test]
+fn empty_search_field_hides_the_empty_message() {
+    let (_, mut app, _) = grid_app(0, true);
+    app.query.clear();
+    assert!(!app.shows_empty_message());
+    app.query = "   ".to_string();
+    assert!(!app.shows_empty_message());
+
+    app.query = "ab".to_string();
+    assert!(app.shows_empty_message());
+}

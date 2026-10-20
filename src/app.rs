@@ -442,6 +442,12 @@ impl ModalApp {
         self.filter_visible.clone()
     }
 
+    /// Whether the empty-state message applies. An untouched (empty or
+    /// whitespace-only) search field must stay blank.
+    fn shows_empty_message(&self) -> bool {
+        !self.query.trim().is_empty()
+    }
+
     fn activate(&self, visible: &[usize], pos: usize) -> Option<RowAction> {
         let &idx = visible.get(pos)?;
         let opt = self.level_opt(idx)?;
@@ -1341,10 +1347,15 @@ impl eframe::App for ModalApp {
             // frame behind typing.
             let visible = self.visible_indices();
             if visible.is_empty() {
-                let msg = self.modal.empty_message.clone();
-                ui.colored_label(t.dim_text, &msg);
-                if self.modal.allow_custom_input && !self.query.is_empty() {
-                    ui.colored_label(t.dim_text, format!("Enter ↵: use \"{}\"", self.query));
+                // An empty query is the "nothing filtered yet" state (e.g. a
+                // hidden list or a loading modal), not a failed search: stay
+                // blank instead of claiming "No matches".
+                if self.shows_empty_message() {
+                    let msg = self.modal.empty_message.clone();
+                    ui.colored_label(t.dim_text, &msg);
+                    if self.modal.allow_custom_input && !self.query.is_empty() {
+                        ui.colored_label(t.dim_text, format!("Enter ↵: use \"{}\"", self.query));
+                    }
                 }
             } else if matches!(self.modal.layout, Layout::Grid) {
                 self.show_grid(ctx, ui, &visible, &t, hover_fresh);
