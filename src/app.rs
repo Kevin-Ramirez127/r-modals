@@ -247,15 +247,22 @@ impl ModalApp {
             .outer_margin(t.margin);
         egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
             ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
-            ui.colored_label(t.dim_text, &self.loading_message);
-            if let Some(hint) = self.modal.footer_hint.clone() {
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() * 0.38).max(8.0));
+                ui.add(
+                    egui::Spinner::new()
+                        .size(t.font_size * 1.6)
+                        .color(t.dim_text),
+                );
+                ui.add_space(10.0);
+                ui.colored_label(t.dim_text, &self.loading_message);
                 ui.add_space(6.0);
                 ui.label(
-                    egui::RichText::new(hint)
+                    egui::RichText::new("Esc to cancel")
                         .size(t.font_size * 0.78)
                         .color(t.dim_text),
                 );
-            }
+            });
         });
         // Keep polling the channel: the producer cannot wake egui itself.
         ctx.request_repaint_after(Duration::from_millis(50));
