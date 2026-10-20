@@ -41,6 +41,9 @@ pub struct ModalSelection {
 pub struct Modal {
     pub(crate) title: String,
     pub(crate) options: Vec<ModalOption>,
+    /// Message shown while [`Modal::run_streaming`] waits for its first batch.
+    /// `None` falls back to "Loading…".
+    pub(crate) loading_message: Option<String>,
     pub(crate) search: SearchConfig,
     pub(crate) theme: Theme,
     pub(crate) layout: Layout,
@@ -85,6 +88,7 @@ impl Modal {
         Self {
             title: title.into(),
             options: Vec::new(),
+            loading_message: None,
             search: SearchConfig::default(),
             theme: Theme::default(),
             layout: Layout::default(),
@@ -115,6 +119,13 @@ impl Modal {
     /// Append one option.
     pub fn option(mut self, opt: ModalOption) -> Self {
         self.options.push(opt);
+        self
+    }
+
+    /// Message shown while [`Modal::run_streaming`] waits for its first
+    /// options batch. Ignored by [`Modal::run`].
+    pub fn loading_message(mut self, text: impl Into<String>) -> Self {
+        self.loading_message = Some(text.into());
         self
     }
 
@@ -652,7 +663,28 @@ impl Modal {
     /// [`Modal::prefixes_file`]) runs its action inside the window and closes
     /// with `Ok(None)` — there is no row to return.
     pub fn run(self) -> Result<Option<ModalSelection>, ModalError> {
-        if self.options.is_empty() {
+        self.run_inner(None)
+    }
+
+    /// Like [`Modal::run`], but the options are delivered later over
+    /// `options_rx`.
+    ///
+    /// The window opens immediately in a loading state (see
+    /// [`Modal::loading_message`]) and fills in when the first
+    /// `Vec<ModalOption>` arrives. Later batches replace the list. The producer
+    /// closing the channel while still loading is treated as cancellation.
+    pub fn run_streaming(
+        self,
+        options_rx: std::sync::mpsc::Receiver<Vec<ModalOption>>,
+    ) -> Result<Option<ModalSelection>, ModalError> {
+        self.run_inner(Some(options_rx))
+    }
+
+    fn run_inner(
+        self,
+        options_rx: Option<std::sync::mpsc::Receiver<Vec<ModalOption>>>,
+    ) -> Result<Option<ModalSelection>, ModalError> {
+        if self.options.is_empty() && options_rx.is_none() {
             return Err(ModalError::NoOptions);
         }
         // Actions are cloned out first: `self` moves into the GUI closure.
@@ -700,11 +732,25 @@ impl Modal {
         };
 
         let modal = modal;
+        let loading_message = modal
+            .loading_message
+            .clone()
+            .unwrap_or_else(|| "Loading…".to_string());
         let res = eframe::run_native(
             &title,
             options,
             Box::new(move |cc| {
-                Ok(Box::new(crate::app::ModalApp::new(cc, modal, inner)) as Box<dyn eframe::App>)
+                let app = match options_rx {
+                    Some(rx) => crate::app::ModalApp::new_with_stream(
+                        cc,
+                        modal,
+                        inner,
+                        Some(rx),
+                        loading_message,
+                    ),
+                    None => crate::app::ModalApp::new(cc, modal, inner),
+                };
+                Ok(Box::new(app) as Box<dyn eframe::App>)
             }),
         );
 

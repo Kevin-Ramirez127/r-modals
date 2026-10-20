@@ -3,7 +3,9 @@ use crate::prefix::{self, CompiledPrefix};
 use crate::shortcut::ShortcutTarget;
 use crate::{IconSource, Layout, Modal, ModalOption, ModalSelection};
 use std::collections::HashMap;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Retry budget for fit-to-content resizes (frames). Covers the startup
 /// race where the window manager drops the first `InnerSize` while the
@@ -19,6 +21,12 @@ pub(crate) enum RowAction {
 
 pub(crate) struct ModalApp {
     modal: Modal,
+    /// Options still arriving for [`Modal::run_streaming`].
+    options_rx: Option<Receiver<Vec<ModalOption>>>,
+    /// True until the first streaming options batch arrives.
+    loading: bool,
+    /// Shown while `loading` is true.
+    loading_message: String,
     query: String,
     cursor: usize,
     textures: HashMap<String, egui::TextureHandle>,
@@ -86,9 +94,27 @@ impl ModalApp {
         modal: Modal,
         result: Arc<Mutex<Option<ModalSelection>>>,
     ) -> Self {
+        Self::new_with_stream(cc, modal, result, None, String::new())
+    }
+
+    pub(crate) fn new_with_stream(
+        cc: &eframe::CreationContext<'_>,
+        modal: Modal,
+        result: Arc<Mutex<Option<ModalSelection>>>,
+        options_rx: Option<Receiver<Vec<ModalOption>>>,
+        loading_message: String,
+    ) -> Self {
         let query = modal.initial_query.clone();
+        let loading = options_rx.is_some() && modal.options.is_empty();
         let mut app = Self {
             modal,
+            options_rx,
+            loading,
+            loading_message: if loading_message.is_empty() {
+                "Loading…".to_string()
+            } else {
+                loading_message
+            },
             query,
             cursor: 0,
             textures: HashMap::new(),
@@ -139,16 +165,100 @@ impl ModalApp {
             cc.egui_ctx.set_fonts(fonts);
         }
         // Initial cursor honors `default_selected` when visible.
-        if let Some(want) = &app.modal.default_selected {
-            if let Some(pos) = app
-                .filter_visible
-                .iter()
-                .position(|&i| app.level_slice().get(i).is_some_and(|o| &o.id == want))
-            {
-                app.cursor = pos;
+        app.select_default();
+        app
+    }
+
+    /// Move the cursor to `default_selected`, if it is visible.
+    fn select_default(&mut self) {
+        let Some(want) = self.modal.default_selected.clone() else {
+            return;
+        };
+        if let Some(pos) = self
+            .filter_visible
+            .iter()
+            .position(|&i| self.level_slice().get(i).is_some_and(|o| o.id == want))
+        {
+            self.cursor = pos;
+        }
+    }
+
+    /// Fold in options that arrived for [`crate::Modal::run_streaming`].
+    ///
+    /// Returns `true` when the producer went away before sending anything and
+    /// the window was closed as cancelled.
+    fn poll_options(&mut self, ctx: &egui::Context) -> bool {
+        let Some(rx) = self.options_rx.take() else {
+            return false;
+        };
+        let mut latest = None;
+        loop {
+            match rx.try_recv() {
+                Ok(options) => latest = Some(options),
+                Err(TryRecvError::Empty) => {
+                    self.options_rx = Some(rx);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => break,
             }
         }
-        app
+        if let Some(options) = latest {
+            self.modal.options = options;
+            self.loading = false;
+            self.nav_path.clear();
+            self.cursor = 0;
+            self.remembered_columns = None;
+            self.refresh_level_caches();
+            self.filter_initialized = false;
+            self.refresh_filter_cache();
+            self.select_default();
+        }
+        if self.loading && self.options_rx.is_none() {
+            self.loading = false;
+            self.finish(None, ctx);
+            return true;
+        }
+        false
+    }
+
+    /// Apply the theme-derived egui style once; egui keeps it across frames.
+    fn apply_style_once(&mut self, ctx: &egui::Context, t: &crate::Theme) {
+        if self.style_applied {
+            return;
+        }
+        let mut style = (*ctx.style()).clone();
+        style.visuals.window_fill = t.background;
+        style.visuals.panel_fill = t.background;
+        style.visuals.selection.bg_fill = t.selected;
+        style.visuals.widgets.inactive.bg_fill = t.surface;
+        style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
+        style.visuals.widgets.active.bg_fill = t.selected;
+        ctx.set_style(style);
+        self.style_applied = true;
+    }
+
+    /// The first frame(s) of [`crate::Modal::run_streaming`]: a themed window
+    /// with a message instead of the picker. Only Esc is meaningful.
+    fn show_loading(&self, ctx: &egui::Context, t: &crate::Theme) {
+        let frame = egui::Frame::new()
+            .fill(t.background)
+            .corner_radius(t.corner_radius)
+            .inner_margin(t.padding)
+            .outer_margin(t.margin);
+        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
+            ui.colored_label(t.dim_text, &self.loading_message);
+            if let Some(hint) = self.modal.footer_hint.clone() {
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new(hint)
+                        .size(t.font_size * 0.78)
+                        .color(t.dim_text),
+                );
+            }
+        });
+        // Keep polling the channel: the producer cannot wake egui itself.
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 
     /// Options of the currently shown level (root when `nav_path` is empty).
@@ -916,6 +1026,23 @@ impl eframe::App for ModalApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Options may still be arriving (run_streaming): fold them in first so
+        // shortcuts and rendering see the current list.
+        if self.poll_options(ctx) {
+            return;
+        }
+        if self.loading {
+            // Only Esc is meaningful while waiting for the first batch.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.finish(None, ctx);
+                return;
+            }
+            let t = self.modal.theme.clone();
+            self.apply_style_once(ctx, &t);
+            self.show_loading(ctx, &t);
+            return;
+        }
+
         // File-configured shortcuts win over the built-in keys so a user can
         // rebind them (e.g. make `Enter` do something else). Checked first.
         if self.fire_shortcut(ctx) {
@@ -1102,17 +1229,7 @@ impl eframe::App for ModalApp {
         // Styling. egui retains the style across frames, so set it once:
         // cloning + installing the whole `Style` every frame invalidates
         // visuals at 60Hz for a theme that never changes mid-modal.
-        if !self.style_applied {
-            let mut style = (*ctx.style()).clone();
-            style.visuals.window_fill = t.background;
-            style.visuals.panel_fill = t.background;
-            style.visuals.selection.bg_fill = t.selected;
-            style.visuals.widgets.inactive.bg_fill = t.surface;
-            style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
-            style.visuals.widgets.active.bg_fill = t.selected;
-            ctx.set_style(style);
-            self.style_applied = true;
-        }
+        self.apply_style_once(ctx, &t);
 
         // One input poll per frame; rows/tiles receive the bool instead of
         // each locking `ctx.input` themselves (O(n) locks per frame).

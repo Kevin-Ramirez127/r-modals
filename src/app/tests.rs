@@ -915,3 +915,40 @@ fn run_prefix_builds_selection_with_remainder() {
     assert_eq!(sel.path, vec![1, 2]);
     assert!(sel.custom_input);
 }
+
+#[test]
+fn streaming_options_fill_the_loading_modal() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let modal = Modal::new("Search").loading_message("Loading…");
+    let mut app = ModalApp::new_with_stream(&cc, modal, result, Some(rx), "Loading…".into());
+
+    assert!(app.loading);
+    assert!(app.modal.options.is_empty());
+
+    tx.send(vec![
+        ModalOption::new("a", "Alpha"),
+        ModalOption::new("b", "Beta"),
+    ])
+    .unwrap();
+    assert!(!app.poll_options(&ctx));
+    assert!(!app.loading);
+    assert_eq!(app.modal.options.len(), 2);
+    assert_eq!(app.modal.options[0].label, "Alpha");
+}
+
+#[test]
+fn streaming_disconnect_while_loading_cancels() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<ModalOption>>();
+    let modal = Modal::new("Search").loading_message("Loading…");
+    let mut app = ModalApp::new_with_stream(&cc, modal, result, Some(rx), "Loading…".into());
+
+    drop(tx);
+    assert!(app.poll_options(&ctx));
+    assert!(!app.loading);
+}
