@@ -81,6 +81,7 @@ pub(crate) struct ModalApp {
     filter_fuzzy: bool,
     filter_enabled: bool,
     filter_max: Option<usize>,
+    filter_min_match_chars: Option<usize>,
     filter_visible: Vec<usize>,
     filter_initialized: bool,
     /// egui style persists across frames: applying it once avoids cloning
@@ -139,6 +140,7 @@ impl ModalApp {
             filter_fuzzy: false,
             filter_enabled: true,
             filter_max: None,
+            filter_min_match_chars: None,
             filter_visible: Vec::new(),
             filter_initialized: false,
             style_applied: false,
@@ -361,12 +363,14 @@ impl ModalApp {
         let case_sensitive = self.modal.search.case_sensitive;
         let fuzzy = self.modal.search.fuzzy;
         let max = self.modal.max_results;
+        let min_match_chars = self.modal.search.min_match_chars;
         if self.filter_initialized
             && self.filter_query == self.query
             && self.filter_case_sensitive == case_sensitive
             && self.filter_fuzzy == fuzzy
             && self.filter_enabled == enabled
             && self.filter_max == max
+            && self.filter_min_match_chars == min_match_chars
         {
             return;
         }
@@ -388,7 +392,13 @@ impl ModalApp {
             }
         }
         let lowered = &self.level_lowered;
-        let mut visible: Vec<usize> = if !enabled || query.is_empty() {
+        // Hidden default view: short (or empty) queries reveal only exact
+        // label/id matches; from `min` characters on, the normal rules apply.
+        let hidden_short =
+            enabled && min_match_chars.is_some_and(|m| query.trim().chars().count() < m);
+        let mut visible: Vec<usize> = if hidden_short {
+            crate::search::exact_match_indices(level, &query, case_sensitive)
+        } else if !enabled || query.is_empty() {
             (0..level.len()).collect()
         } else if fuzzy {
             let mut scored: Vec<(usize, i32)> = level
@@ -423,6 +433,7 @@ impl ModalApp {
         self.filter_fuzzy = fuzzy;
         self.filter_enabled = enabled;
         self.filter_max = max;
+        self.filter_min_match_chars = min_match_chars;
         self.filter_initialized = true;
     }
 

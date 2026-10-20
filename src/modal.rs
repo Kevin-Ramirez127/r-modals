@@ -160,6 +160,17 @@ impl Modal {
         self
     }
 
+    /// Hide the full list until the query is at least `chars` characters.
+    ///
+    /// Shorter queries (including the empty one) list only options whose label
+    /// or id equals the query exactly, which keeps a sensitive list out of
+    /// view until the user commits to a search. Queries of `chars` or more use
+    /// the normal match rules. `0` disables the behavior.
+    pub fn min_match_chars(mut self, chars: usize) -> Self {
+        self.search.min_match_chars = (chars > 0).then_some(chars);
+        self
+    }
+
     /// Full search config override.
     pub fn search_config(mut self, cfg: SearchConfig) -> Self {
         self.search = cfg;

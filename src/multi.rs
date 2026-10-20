@@ -94,9 +94,7 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                             i.consume_key(egui::Modifiers::NONE, egui::Key::Space),
                         )
                     });
-                    let mut visible: Vec<usize> = if !self.modal.search.enabled
-                        || self.query.is_empty()
-                    {
+                    let mut visible: Vec<usize> = if !self.modal.search.enabled {
                         (0..self.modal.options.len()).collect()
                     } else {
                         filter_options_with(&self.modal.options, &self.query, &self.modal.search)
@@ -181,20 +179,19 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                             }
                             ui.add_space(8.0);
                         }
-                        let visible_now: Vec<usize> =
-                            if !self.modal.search.enabled || self.query.is_empty() {
-                                (0..self.modal.options.len()).collect()
-                            } else {
-                                let mut v = filter_options_with(
-                                    &self.modal.options,
-                                    &self.query,
-                                    &self.modal.search,
-                                );
-                                if let Some(m) = self.modal.max_results {
-                                    v.truncate(m);
-                                }
-                                v
-                            };
+                        let visible_now: Vec<usize> = if !self.modal.search.enabled {
+                            (0..self.modal.options.len()).collect()
+                        } else {
+                            let mut v = filter_options_with(
+                                &self.modal.options,
+                                &self.query,
+                                &self.modal.search,
+                            );
+                            if let Some(m) = self.modal.max_results {
+                                v.truncate(m);
+                            }
+                            v
+                        };
                         egui::ScrollArea::vertical()
                             .max_height(t.height - 140.0)
                             .auto_shrink([false, true])

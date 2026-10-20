@@ -12,7 +12,7 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query
 - **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
-- **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
+- **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
 - **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`
 - **Layouts** — `List` rows or `Grid` image tiles
 - **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`, `Theme::auto()`

@@ -3,6 +3,9 @@
 ## 0.2.0 — unreleased
 
 ### Picker UX
+- `Modal::min_match_chars(n)` hides the full list until the query reaches `n`
+  characters; shorter queries show only exact label/id matches (empty query:
+  nothing), so sensitive lists stay out of view
 - Fuzzy subsequence match (`Modal::fuzzy`, ranked best-first) alongside substring search
 - `ModalOption::disabled`, `ModalOption::separator`, `ModalOption::shortcut`,
   `ModalOption::keywords`/`keyword` (matched in both search modes)

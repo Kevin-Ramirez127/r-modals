@@ -97,3 +97,59 @@ fn keywords_match_both_modes() {
     };
     assert_eq!(filter_options_with(&o, "ffx", &cfg), vec![0]);
 }
+
+fn hidden(min: usize) -> SearchConfig {
+    SearchConfig {
+        min_match_chars: Some(min),
+        ..SearchConfig::default()
+    }
+}
+
+fn names() -> Vec<ModalOption> {
+    vec![
+        ModalOption::new("gh", "GitHub"),
+        ModalOption::new("gl", "GitLab"),
+        ModalOption::new("ff", "Firefox"),
+    ]
+}
+
+#[test]
+fn hidden_default_view_lists_nothing_for_empty_query() {
+    let cfg = hidden(3);
+    assert!(filter_options_with(&names(), "", &cfg).is_empty());
+    assert!(filter_options_with(&names(), "   ", &cfg).is_empty());
+    assert!(filter_options_with(&names(), "g", &cfg).is_empty());
+    assert!(filter_options_with(&names(), "gi", &cfg).is_empty());
+}
+
+#[test]
+fn short_queries_only_show_exact_matches() {
+    let cfg = hidden(3);
+    // Exact label, case-insensitively, at any query length.
+    assert_eq!(filter_options_with(&names(), "GitHub", &cfg), vec![0]);
+    assert_eq!(filter_options_with(&names(), "github", &cfg), vec![0]);
+    // Exact id also counts (useful when the label carries extra text).
+    assert_eq!(filter_options_with(&names(), "ff", &cfg), vec![2]);
+    // From three characters on, normal substring matching applies.
+    assert_eq!(filter_options_with(&names(), "git", &cfg), vec![0, 1]);
+    assert_eq!(filter_options_with(&names(), "fire", &cfg), vec![2]);
+}
+
+#[test]
+fn exact_match_respects_case_sensitivity() {
+    let o = vec![ModalOption::new("ex", "X")];
+    let cfg = SearchConfig {
+        case_sensitive: true,
+        ..hidden(3)
+    };
+    assert_eq!(filter_options_with(&o, "X", &cfg), vec![0]);
+    assert!(filter_options_with(&o, "x", &cfg).is_empty());
+}
+
+#[test]
+fn min_match_chars_none_keeps_listing_everything() {
+    assert_eq!(
+        filter_options_with(&names(), "", &SearchConfig::default()),
+        vec![0, 1, 2]
+    );
+}
