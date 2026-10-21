@@ -1092,6 +1092,7 @@ impl eframe::App for ModalApp {
             ctrl_n,
             ctrl_p,
             ctrl_u,
+            tab,
         ) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
@@ -1107,11 +1108,22 @@ impl eframe::App for ModalApp {
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::N),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::P),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::U),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
             )
         });
         if ctrl_u {
             self.query.clear();
             self.cursor = 0;
+        }
+        // Tab completes the prefix the user is typing (`>sh` → `>show items`).
+        // Consumed above, so the text field never inserts a tab.
+        let mut tab_completed = false;
+        if tab {
+            if let Some(cp) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
+                self.query = cp.prefix.clone();
+                self.cursor = 0;
+                tab_completed = true;
+            }
         }
         if esc {
             if self.nav_path.is_empty() {
@@ -1324,14 +1336,33 @@ impl eframe::App for ModalApp {
                 if resp.changed() {
                     self.cursor = 0;
                 }
+                // Tab replaced the buffer text before this field was drawn, so
+                // move the editing cursor to the end of the completed prefix.
+                if tab_completed {
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), self.search_id) {
+                        let end = egui::text::CCursor::new(self.query.chars().count());
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                        state.store(ui.ctx(), self.search_id);
+                    }
+                    resp.request_focus();
+                }
                 ui.add_space(8.0);
-                // Active prefix: Enter runs it instead of picking a row.
+                // Active prefix: Enter runs it. Partial prefix: Tab completes
+                // it to the shortest registered match.
+                let mut hints: Vec<String> = Vec::new();
                 if let Some((p, _)) =
                     prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
                 {
-                    let hint = p.hint.clone();
+                    hints.push(format!("↵ run \"{}\"", p.hint));
+                }
+                if let Some(c) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
+                    hints.push(format!("Tab ⇥ complete \"{}\"", c.prefix));
+                }
+                if !hints.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("↵ run \"{hint}\""))
+                        egui::RichText::new(hints.join("  ·  "))
                             .size(t.font_size * 0.8)
                             .color(t.dim_text),
                     );
