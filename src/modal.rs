@@ -8,7 +8,7 @@ use crate::{
 use std::sync::{Arc, Mutex};
 
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModalSelection {
     /// The `id` of the chosen option.
     pub id: String,
@@ -465,6 +465,12 @@ impl Modal {
     /// auto-fill the matching rows' shortcut hints. Split out of
     /// [`Modal::run`] so it is testable without a display.
     pub(crate) fn resolve_shortcuts(&mut self) -> Result<(), ModalError> {
+        self.resolve_shortcuts_with(false)
+    }
+
+    /// Resolve shortcuts, keeping `option = "..."` bindings even when their
+    /// options have not arrived yet (the streaming CLI case).
+    pub(crate) fn resolve_shortcuts_with(&mut self, streaming: bool) -> Result<(), ModalError> {
         let mut specs: Vec<ShortcutSpec> = Vec::new();
         for source in &self.shortcut_sources {
             match source {
@@ -488,7 +494,9 @@ impl Modal {
         let mut compiled = shortcut::compile_all(&specs).map_err(ModalError::Shortcuts)?;
         // An `option` shortcut whose id is absent would be a dead key: drop it.
         compiled.retain(|c| match &c.target {
-            ShortcutTarget::Option(id) => find_option_path(&self.options, id).is_some(),
+            ShortcutTarget::Option(id) => {
+                streaming || find_option_path(&self.options, id).is_some()
+            }
             ShortcutTarget::Action(_) => true,
             ShortcutTarget::Pick(_) => true,
         });
@@ -707,72 +715,34 @@ impl Modal {
         let actions = self.collect_actions();
         let mut modal = self;
         modal.apply_history();
-        modal.resolve_shortcuts()?;
+        if options_rx.is_some() {
+            modal.resolve_shortcuts_with(true)?;
+        } else {
+            modal.resolve_shortcuts()?;
+        }
         modal.resolve_prefixes()?;
         modal.theme = modal.resolved_theme()?;
         let history_file = modal.history_file.clone();
         let shared: Arc<Mutex<Option<ModalSelection>>> = Arc::new(Mutex::new(None));
         let inner = shared.clone();
-        let title = modal.title.clone();
         let theme = modal.theme.clone();
         let position = modal.position;
         let app_id = modal.app_id.clone();
-
-        let viewport = {
-            let mut v = egui::ViewportBuilder::default()
-                .with_title(&title)
-                .with_app_id(&app_id)
-                .with_inner_size([theme.width, theme.height])
-                .with_min_inner_size([320.0, 200.0])
-                .with_decorations(false)
-                .with_always_on_top()
-                .with_resizable(true)
-                .with_transparent(true);
-            match position {
-                Position::Center => {}
-                Position::TopCenter { y_offset } => {
-                    // Best-effort: eframe centers by default; offset must be
-                    // applied by the compositor/WM. We keep the variant for
-                    let _ = y_offset;
-                }
-                Position::Custom { x, y } => {
-                    v = v.with_position([x as f32, y as f32]);
-                }
-            }
-            v
-        };
-
-        let options = eframe::NativeOptions {
-            viewport,
-            ..Default::default()
-        };
+        let title = modal.title.clone();
 
         let modal = modal;
         let loading_message = modal
             .loading_message
             .clone()
             .unwrap_or_else(|| "Loading…".to_string());
-        let res = eframe::run_native(
-            &title,
-            options,
-            Box::new(move |cc| {
-                let app = match options_rx {
-                    Some(rx) => crate::app::ModalApp::new_with_stream(
-                        cc,
-                        modal,
-                        inner,
-                        Some(rx),
-                        loading_message,
-                    ),
-                    None => crate::app::ModalApp::new(cc, modal, inner),
-                };
-                Ok(Box::new(app) as Box<dyn eframe::App>)
-            }),
-        );
-
-        if let Err(e) = res {
-            return Err(ModalError::Backend(e.to_string()));
-        }
+        let spec = crate::window::WindowSpec::modal(title, &theme, app_id, position);
+        let res = crate::window::run_app(spec, move |cc| match options_rx {
+            Some(rx) => {
+                crate::app::ModalApp::new_with_stream(cc, modal, inner, Some(rx), loading_message)
+            }
+            None => crate::app::ModalApp::new(cc, modal, inner),
+        });
+        res?;
         let picked: Option<ModalSelection> = shared.lock().map(|g| g.clone()).unwrap_or(None);
         if let Some(ref sel) = picked {
             if let Some(path) = &history_file {

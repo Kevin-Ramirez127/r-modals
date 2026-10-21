@@ -13,6 +13,10 @@ pub enum ModalError {
     Prefixes(String),
     /// The GUI backend failed to start (e.g. no display).
     Backend(String),
+    /// Spawning/waiting for a dialog process failed.
+    Io(String),
+    /// A dialog child violated the line/JSON output protocol.
+    Protocol(String),
 }
 
 impl std::fmt::Display for ModalError {
@@ -23,6 +27,8 @@ impl std::fmt::Display for ModalError {
             ModalError::Shortcuts(e) => write!(f, "r-modals shortcuts error: {e}"),
             ModalError::Prefixes(e) => write!(f, "r-modals prefixes error: {e}"),
             ModalError::Backend(e) => write!(f, "r-modals backend error: {e}"),
+            ModalError::Io(e) => write!(f, "r-modals I/O error: {e}"),
+            ModalError::Protocol(e) => write!(f, "r-modals protocol error: {e}"),
         }
     }
 }

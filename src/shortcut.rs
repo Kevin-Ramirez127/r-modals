@@ -315,12 +315,16 @@ pub(crate) fn compile(spec: &ShortcutSpec) -> Result<CompiledShortcut, String> {
         (Some(id), None, None, None) => ShortcutTarget::Option(id.to_string()),
         (None, None, None, Some(tag)) => ShortcutTarget::Pick(tag.to_string()),
         (None, Some(prog), None, None) => ShortcutTarget::Action(SelectAction::Command {
-            program: prog.to_string(),
-            args: spec.args.clone(),
+            program: crate::prefix::substitute_exe(prog, false),
+            args: spec
+                .args
+                .iter()
+                .map(|a| crate::prefix::substitute_exe(a, false))
+                .collect(),
         }),
-        (None, None, Some(cmd), None) => {
-            ShortcutTarget::Action(SelectAction::Shell(cmd.to_string()))
-        }
+        (None, None, Some(cmd), None) => ShortcutTarget::Action(SelectAction::Shell(
+            crate::prefix::substitute_exe(cmd, true),
+        )),
         (None, None, None, None) => {
             return Err(format!(
                 "shortcut {} sets none of option/pick/command/shell",

@@ -70,6 +70,32 @@ fn compile_builds_each_target_kind() {
 }
 
 #[test]
+fn compile_expands_exe_in_command_and_shell() {
+    let exe = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let cmd = compile(&PrefixSpec::command(">", "{exe}").arg("{exe}")).unwrap();
+    match cmd.action {
+        SelectAction::Command { program, args } => {
+            assert_eq!(program, exe);
+            assert_eq!(args, vec![exe.clone()]);
+        }
+        other => panic!("expected command, got {other:?}"),
+    }
+
+    let sh = compile(&PrefixSpec::shell(">", "{exe} sync")).unwrap();
+    match sh.action {
+        SelectAction::Shell(cmd) => {
+            assert!(cmd.contains(&shell_quote(&exe)));
+            assert!(!cmd.contains("{exe}"));
+        }
+        other => panic!("expected shell, got {other:?}"),
+    }
+}
+
+#[test]
 fn compile_rejects_invalid_specs() {
     // Empty / whitespace-only prefix.
     assert!(compile(&PrefixSpec::command("", "true")).is_err());

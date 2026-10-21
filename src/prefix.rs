@@ -183,10 +183,10 @@ pub(crate) fn compile(spec: &PrefixSpec) -> Result<CompiledPrefix, String> {
     }
     let action = match (spec.command.as_deref(), spec.shell.as_deref()) {
         (Some(prog), None) => SelectAction::Command {
-            program: prog.to_string(),
-            args: spec.args.clone(),
+            program: substitute_exe(prog, false),
+            args: spec.args.iter().map(|a| substitute_exe(a, false)).collect(),
         },
-        (None, Some(cmd)) => SelectAction::Shell(cmd.to_string()),
+        (None, Some(cmd)) => SelectAction::Shell(substitute_exe(cmd, true)),
         (None, None) => return Err(format!("prefix {prefix:?} sets neither command nor shell")),
         (Some(_), Some(_)) => return Err(format!("prefix {prefix:?} sets both command and shell")),
     };
@@ -272,12 +272,32 @@ fn parameter(rest: &str) -> String {
 }
 
 /// Quote one word for the platform shell used by [`SelectAction::Shell`].
-fn shell_quote(s: &str) -> String {
+pub(crate) fn shell_quote(s: &str) -> String {
     if cfg!(windows) {
         format!("\"{}\"", s.replace('"', "\"\""))
     } else {
         format!("'{}'", s.replace('\'', "'\\''"))
     }
+}
+
+/// The executable that owns the compiled config. Prefixes and shortcuts are
+/// compiled in the consumer's dialog child, so `{exe}` expands to that consumer
+/// (for example `quick-bitwarden`) rather than to the r-modals library.
+pub(crate) fn current_exe() -> String {
+    std::env::current_exe()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "r-modals".to_string())
+}
+
+/// Replace `{exe}` with the current executable, shell-quoted when the token sits
+/// in a shell one-liner and raw in `command`/`args`.
+pub(crate) fn substitute_exe(text: &str, quote: bool) -> String {
+    if !text.contains("{exe}") {
+        return text.to_string();
+    }
+    let exe = current_exe();
+    let repl = if quote { shell_quote(&exe) } else { exe };
+    text.replace("{exe}", &repl)
 }
 
 /// Replace every `{query}` token in `text` with `rest` (shell-quoted when
