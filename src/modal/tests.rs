@@ -187,6 +187,25 @@ fn resolve_shortcuts_fills_hints_and_drops_unknown_ids() {
 }
 
 #[test]
+fn streaming_keeps_option_shortcuts_until_options_arrive() {
+    let mut m = Modal::new("x").shortcuts_toml(
+        r#"
+        [[shortcut]]
+        key = "Ctrl+O"
+        option = "ff"
+        "#,
+    );
+    // No options yet: the shortcut must survive so it still works after the
+    // first streamed batch arrives.
+    m.resolve_shortcuts_with(true).unwrap();
+    assert_eq!(m.compiled_shortcuts.len(), 1);
+    assert!(matches!(
+        m.compiled_shortcuts[0].target,
+        crate::shortcut::ShortcutTarget::Option(ref id) if id == "ff"
+    ));
+}
+
+#[test]
 fn resolve_shortcuts_command_target_and_errors() {
     let mut m = Modal::new("x")
         .option(ModalOption::new("a", "A"))

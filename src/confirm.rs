@@ -1,6 +1,7 @@
 //! [`Confirm`] — a yes/no dialog on the same borderless backend.
 
-use crate::{ModalError, Theme};
+use crate::window::{run_app, WindowSpec};
+use crate::{ModalError, Position, Theme};
 
 /// One-shot confirmation dialog.
 ///
@@ -16,6 +17,9 @@ pub struct Confirm {
     cancel_label: String,
     theme: Theme,
     app_id: String,
+    position: Position,
+    stylesheet: Option<String>,
+    show_title: bool,
 }
 
 impl Confirm {
@@ -28,6 +32,9 @@ impl Confirm {
             cancel_label: "Cancel".to_string(),
             theme: Theme::default(),
             app_id: "r-modals".to_string(),
+            position: Position::Center,
+            stylesheet: None,
+            show_title: true,
         }
     }
 
@@ -55,6 +62,27 @@ impl Confirm {
         self
     }
 
+    /// Style the dialog from CSS (same subset as [`Theme::from_css`]).
+    pub fn stylesheet(mut self, css: impl Into<String>) -> Self {
+        self.stylesheet = Some(css.into());
+        self
+    }
+
+    /// Window placement.
+    pub fn position(mut self, pos: Position) -> Self {
+        self.position = pos;
+        self
+    }
+
+    /// Render the title inside the borderless window. Defaults to `true`.
+    ///
+    /// Decorations are off, so the OS title bar is never visible; hiding the
+    /// in-body title leaves only the message.
+    pub fn show_title(mut self, yes: bool) -> Self {
+        self.show_title = yes;
+        self
+    }
+
     /// Wayland app_id (and X11 class hint).
     pub fn app_id(mut self, id: impl Into<String>) -> Self {
         self.app_id = id.into();
@@ -65,106 +93,112 @@ impl Confirm {
     /// cancelled / Esc / window closed.
     pub fn run(self) -> Result<bool, ModalError> {
         use std::sync::{Arc, Mutex};
+        let mut theme = self.theme.clone();
+        if let Some(css) = &self.stylesheet {
+            theme.apply_css(css).map_err(ModalError::Css)?;
+        }
         let shared: Arc<Mutex<Option<bool>>> = Arc::new(Mutex::new(None));
         let inner = shared.clone();
         let title = self.title.clone();
-        let theme = self.theme.clone();
-        let app_id = self.app_id.clone();
         let confirm_label = self.confirm_label.clone();
         let cancel_label = self.cancel_label.clone();
         let message = self.message.clone();
+        let show_title = self.show_title;
 
-        let viewport = egui::ViewportBuilder::default()
-            .with_title(&title)
-            .with_app_id(&app_id)
-            .with_inner_size([theme.width.min(420.0), 180.0])
-            .with_min_inner_size([320.0, 150.0])
-            .with_decorations(false)
-            .with_always_on_top()
-            .with_resizable(false)
-            .with_transparent(true);
-        let res = eframe::run_native(
-            &title,
-            eframe::NativeOptions {
-                viewport,
-                ..Default::default()
-            },
-            Box::new(move |_cc| {
-                struct App {
-                    result: Arc<Mutex<Option<bool>>>,
-                    message: String,
-                    confirm_label: String,
-                    cancel_label: String,
-                    theme: Theme,
-                    focused: bool,
-                }
-                impl eframe::App for App {
-                    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
-                        [0.0, 0.0, 0.0, 0.0]
-                    }
-                    fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
-                        let enter = ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-                        let esc = ctx
-                            .input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
-                        let mut done: Option<bool> = None;
-                        if enter {
-                            done = Some(true);
-                        }
-                        if esc {
-                            done = Some(false);
-                        }
-                        let frame = egui::Frame::new()
-                            .fill(self.theme.background)
-                            .corner_radius(self.theme.corner_radius)
-                            .inner_margin(self.theme.padding)
-                            .outer_margin(self.theme.margin);
-                        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
-                            if !self.message.is_empty() {
-                                ui.label(
-                                    egui::RichText::new(&self.message)
-                                        .size(self.theme.font_size)
-                                        .color(self.theme.text),
-                                );
-                                ui.add_space(12.0);
-                            }
-                            ui.horizontal(|ui| {
-                                let c = ui.button(
-                                    egui::RichText::new(&self.confirm_label)
-                                        .size(self.theme.font_size)
-                                        .color(self.theme.text),
-                                );
-                                if !self.focused {
-                                    c.request_focus();
-                                    self.focused = true;
-                                }
-                                if c.clicked() {
-                                    done = Some(true);
-                                }
-                                if ui.button(&self.cancel_label).clicked() {
-                                    done = Some(false);
-                                }
-                            });
-                        });
-                        if let Some(v) = done {
-                            if let Ok(mut g) = self.result.lock() {
-                                *g = Some(v);
-                            }
-                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                        }
-                    }
-                }
-                Ok(Box::new(App {
-                    result: inner,
-                    message,
-                    confirm_label,
-                    cancel_label,
-                    theme,
-                    focused: false,
-                }) as Box<dyn eframe::App>)
-            }),
+        let spec = WindowSpec::dialog(
+            title.clone(),
+            &theme,
+            self.app_id,
+            420.0,
+            180.0,
+            self.position,
         );
-        res.map_err(|e| ModalError::Backend(e.to_string()))?;
+        run_app(spec, move |_cc| App {
+            result: inner,
+            title,
+            show_title,
+            message,
+            confirm_label,
+            cancel_label,
+            theme,
+            focused: false,
+        })?;
         Ok(shared.lock().map(|g| g.unwrap_or(false)).unwrap_or(false))
+    }
+}
+
+struct App {
+    result: std::sync::Arc<std::sync::Mutex<Option<bool>>>,
+    title: String,
+    show_title: bool,
+    message: String,
+    confirm_label: String,
+    cancel_label: String,
+    theme: Theme,
+    focused: bool,
+}
+
+impl eframe::App for App {
+    fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        [0.0, 0.0, 0.0, 0.0]
+    }
+
+    fn update(&mut self, ctx: &egui::Context, _f: &mut eframe::Frame) {
+        let enter = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+        let esc = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+        let mut done: Option<bool> = None;
+        if enter {
+            done = Some(true);
+        }
+        if esc {
+            done = Some(false);
+        }
+        let frame = egui::Frame::new()
+            .fill(self.theme.background)
+            .corner_radius(self.theme.corner_radius)
+            .inner_margin(self.theme.padding)
+            .outer_margin(self.theme.margin);
+        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            if self.show_title && !self.title.is_empty() {
+                ui.label(
+                    egui::RichText::new(&self.title)
+                        .size(self.theme.font_size * 1.05)
+                        .strong()
+                        .color(self.theme.text),
+                );
+                ui.add_space(6.0);
+            }
+            if !self.message.is_empty() {
+                ui.label(
+                    egui::RichText::new(&self.message)
+                        .size(self.theme.font_size)
+                        .color(self.theme.text),
+                );
+                ui.add_space(12.0);
+            }
+            ui.horizontal(|ui| {
+                let c = ui.button(
+                    egui::RichText::new(&self.confirm_label)
+                        .size(self.theme.font_size)
+                        .color(self.theme.text),
+                );
+                if !self.focused {
+                    c.request_focus();
+                    self.focused = true;
+                }
+                if c.clicked() {
+                    done = Some(true);
+                }
+                if ui.button(&self.cancel_label).clicked() {
+                    done = Some(false);
+                }
+            });
+        });
+        if let Some(v) = done {
+            if let Ok(mut g) = self.result.lock() {
+                *g = Some(v);
+            }
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
     }
 }

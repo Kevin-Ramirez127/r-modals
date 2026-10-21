@@ -944,6 +944,41 @@ fn run_prefix_builds_selection_with_remainder() {
     assert!(sel.custom_input);
 }
 
+/// An `=` after the prefix delimits the parameter handed to the action.
+#[test]
+fn prefix_equals_parameter_reaches_the_action() {
+    use eframe::App as _;
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let seen = Arc::new(Mutex::new(None));
+    let slot = seen.clone();
+    let mut modal = crate::Modal::new("prefixes")
+        .option(crate::ModalOption::new("a", "Alpha"))
+        .prefix_action(
+            ">search",
+            crate::SelectAction::Callback(Arc::new(move |sel| {
+                *slot.lock().unwrap() = Some(sel.query.clone());
+            })),
+        );
+    modal.resolve_prefixes().unwrap();
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result.clone());
+    let mut frame = eframe::Frame::_new_kittest();
+
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    app.query = ">search=Hello World".to_string();
+    t += 1.0 / 60.0;
+    let out = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
+
+    assert!(viewport_closed(&out), "prefix should close the modal");
+    assert!(result.lock().unwrap().is_none());
+    assert_eq!(seen.lock().unwrap().as_deref(), Some("Hello World"));
+}
+
 #[test]
 fn streaming_options_fill_the_loading_modal() {
     let ctx = egui::Context::default();

@@ -2999,6 +2999,7 @@ dependencies = [
  "image",
  "lightningcss",
  "serde",
+ "serde_json",
  "toml",
 ]
 

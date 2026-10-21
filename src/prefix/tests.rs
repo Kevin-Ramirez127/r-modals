@@ -70,6 +70,32 @@ fn compile_builds_each_target_kind() {
 }
 
 #[test]
+fn compile_expands_exe_in_command_and_shell() {
+    let exe = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let cmd = compile(&PrefixSpec::command(">", "{exe}").arg("{exe}")).unwrap();
+    match cmd.action {
+        SelectAction::Command { program, args } => {
+            assert_eq!(program, exe);
+            assert_eq!(args, vec![exe.clone()]);
+        }
+        other => panic!("expected command, got {other:?}"),
+    }
+
+    let sh = compile(&PrefixSpec::shell(">", "{exe} sync")).unwrap();
+    match sh.action {
+        SelectAction::Shell(cmd) => {
+            assert!(cmd.contains(&shell_quote(&exe)));
+            assert!(!cmd.contains("{exe}"));
+        }
+        other => panic!("expected shell, got {other:?}"),
+    }
+}
+
+#[test]
 fn compile_rejects_invalid_specs() {
     // Empty / whitespace-only prefix.
     assert!(compile(&PrefixSpec::command("", "true")).is_err());
@@ -119,6 +145,43 @@ fn match_prefix_longest_wins_and_remainder_is_trimmed() {
     let (p, rest) = match_prefix(&prefixes, ">").unwrap();
     assert_eq!(p.prefix, ">");
     assert!(rest.is_empty());
+}
+
+#[test]
+fn match_prefix_equals_sign_delimits_parameter() {
+    let prefixes = vec![
+        compiled(">search", shell("true")),
+        compiled(">", shell("true")),
+    ];
+
+    // `=` separates the parameter from the prefix and is dropped.
+    let (p, rest) = match_prefix(&prefixes, ">search=Hello World").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello World");
+
+    // Spaces around the `=` are ignored.
+    let (p, rest) = match_prefix(&prefixes, "  >search =  Hello World  ").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello World");
+
+    // The longest registered prefix still wins with the parameter syntax.
+    let (p, rest) = match_prefix(&prefixes, ">search=deep").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "deep");
+
+    // An empty parameter matches the prefix and runs its bare action.
+    let (p, rest) = match_prefix(&prefixes, ">search=").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert!(rest.is_empty());
+
+    // Without `=`, the space-separated remainder keeps working unchanged.
+    let (p, rest) = match_prefix(&prefixes, ">search Hello").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello");
+
+    // The value may contain further `=` signs.
+    let (_, rest) = match_prefix(&prefixes, ">search=a=b").unwrap();
+    assert_eq!(rest, "a=b");
 }
 
 #[test]

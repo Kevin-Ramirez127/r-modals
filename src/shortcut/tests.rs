@@ -122,6 +122,32 @@ fn compile_builds_each_target_kind() {
 }
 
 #[test]
+fn compile_expands_exe_in_actions() {
+    let exe = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let cmd = compile(&ShortcutSpec::command("Ctrl+T", "{exe}").args(["--flag", "{exe}"])).unwrap();
+    match cmd.target {
+        ShortcutTarget::Action(SelectAction::Command { program, args }) => {
+            assert_eq!(program, exe);
+            assert_eq!(args, vec!["--flag".to_string(), exe.clone()]);
+        }
+        other => panic!("expected command, got {other:?}"),
+    }
+
+    let sh = compile(&ShortcutSpec::shell("Ctrl+N", "{exe} sync")).unwrap();
+    match sh.target {
+        ShortcutTarget::Action(SelectAction::Shell(cmd)) => {
+            assert!(cmd.contains(&crate::prefix::shell_quote(&exe)));
+            assert!(!cmd.contains("{exe}"));
+        }
+        other => panic!("expected shell, got {other:?}"),
+    }
+}
+
+#[test]
 fn compile_rejects_ambiguous_or_incomplete_specs() {
     let none = ShortcutSpec {
         key: "Ctrl+O".to_string(),
