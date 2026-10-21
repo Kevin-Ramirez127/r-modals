@@ -25,6 +25,9 @@ pub struct ModalSelection {
     /// True when the pick is free-typed text (no option matched and
     /// [`Modal::allow_custom_input`] was on). `id`/`label` equal the query.
     pub custom_input: bool,
+    /// Tag carried by the pick when it came from a `pick = "<tag>"` shortcut
+    /// (see [`crate::ShortcutSpec::pick`]); `None` for a normal Enter/click.
+    pub shortcut: Option<String>,
 }
 
 /// Builder for an instant modal.
@@ -486,6 +489,7 @@ impl Modal {
         compiled.retain(|c| match &c.target {
             ShortcutTarget::Option(id) => find_option_path(&self.options, id).is_some(),
             ShortcutTarget::Action(_) => true,
+            ShortcutTarget::Pick(_) => true,
         });
         // Surface the binding on the row unless it already declares one.
         for c in &compiled {

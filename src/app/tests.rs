@@ -787,6 +787,34 @@ fn shortcut_key_picks_bound_option() {
     assert_eq!(app.modal.options[1].shortcut.as_deref(), Some("Ctrl+B"));
 }
 
+/// A `pick` shortcut selects the highlighted row and tags the selection.
+#[test]
+fn shortcut_pick_tags_the_highlighted_row() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, result) =
+        shortcut_app("[[shortcut]]\nkey = \"Shift+Enter\"\npick = \"username\"\n");
+    // Highlight the second row first.
+    app.cursor = 1;
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(modified_key_event(
+        egui::Key::Enter,
+        egui::Modifiers {
+            shift: true,
+            ..egui::Modifiers::NONE
+        },
+    ));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    let sel = result.lock().unwrap().clone().expect("a pick");
+    assert_eq!(sel.id, "b");
+    assert_eq!(sel.shortcut.as_deref(), Some("username"));
+}
+
 /// `consume_key` ignores extra shift/alt, so the richer combo must be
 /// tested first or `Ctrl+S` would swallow `Ctrl+Shift+S`.
 #[test]

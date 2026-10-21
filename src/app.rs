@@ -466,6 +466,7 @@ impl ModalApp {
             path,
             query: self.query.clone(),
             custom_input: false,
+            shortcut: None,
         }))
     }
 
@@ -496,6 +497,7 @@ impl ModalApp {
                     path: path.to_vec(),
                     query: self.query.clone(),
                     custom_input: false,
+                    shortcut: None,
                 }),
                 ctx,
             ),
@@ -514,6 +516,7 @@ impl ModalApp {
             path: nav_path.to_vec(),
             query: rest.to_string(),
             custom_input: true,
+            shortcut: None,
         };
         let _ = cp.execute(&sel, rest);
         sel
@@ -550,6 +553,23 @@ impl ModalApp {
                     self.activate_path(&path, ctx);
                 }
             }
+            ShortcutTarget::Pick(tag) => {
+                // Pick the highlighted row like Enter would, but tag the
+                // selection so the caller can interpret it differently.
+                let visible = self.visible_indices();
+                if visible.is_empty() {
+                    return true;
+                }
+                let cursor = self.cursor.min(visible.len() - 1);
+                match self.activate(&visible, cursor) {
+                    Some(RowAction::Pick(mut sel)) => {
+                        sel.shortcut = Some(tag);
+                        self.finish(Some(sel), ctx);
+                    }
+                    Some(RowAction::Drill { index }) => self.enter_level(index),
+                    None => {}
+                }
+            }
             ShortcutTarget::Action(action) => {
                 // Standalone commands have no row to land on: run the action
                 // (best-effort, detached) and close with no pick.
@@ -560,6 +580,7 @@ impl ModalApp {
                     path: Vec::new(),
                     query: String::new(),
                     custom_input: false,
+                    shortcut: None,
                 };
                 let _ = action.execute(&sel);
                 self.finish(None, ctx);
@@ -818,6 +839,7 @@ impl ModalApp {
                                 path,
                                 query: query.clone(),
                                 custom_input: false,
+                                shortcut: None,
                             }));
                         }
                         if action.is_some() {
@@ -973,6 +995,7 @@ impl ModalApp {
                                             path,
                                             query: query.clone(),
                                             custom_input: false,
+                                            shortcut: None,
                                         }))
                                     };
                                     break;
@@ -1243,6 +1266,7 @@ impl eframe::App for ModalApp {
                             path: self.nav_path.clone(),
                             query: q,
                             custom_input: true,
+                            shortcut: None,
                         }),
                         ctx,
                     );
