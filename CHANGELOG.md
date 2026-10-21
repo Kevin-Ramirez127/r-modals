@@ -14,6 +14,8 @@
 - `Modal::default_selected`, `Modal::allow_custom_input` (command-palette free text),
   `Modal::empty_message`, `Modal::footer_hint`, `Modal::max_results`
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
+- `Left`/`Right` move the caret once the focused search field has text,
+  instead of always moving through the list/grid
 - First-query-occurrence highlight (underline, no layout shift)
 
 ### Streaming options

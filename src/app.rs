@@ -1076,6 +1076,13 @@ impl eframe::App for ModalApp {
 
         let t = self.modal.theme.clone();
 
+        // With text in the focused search field, Left/Right belong to the
+        // caret, not to list/grid navigation: leave those events in the queue
+        // so the TextEdit can handle them.
+        let editing_text = self.modal.search.enabled
+            && !self.query.is_empty()
+            && ctx.memory(|m| m.has_focus(self.search_id));
+
         // Global keys — consumed under a single input lock instead of one
         // lock per key.
         let (
@@ -1097,9 +1104,17 @@ impl eframe::App for ModalApp {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                if editing_text {
+                    false
+                } else {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
+                },
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                if editing_text {
+                    false
+                } else {
+                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
+                },
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::End),
