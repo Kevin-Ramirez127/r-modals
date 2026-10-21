@@ -3,7 +3,9 @@ use crate::prefix::{self, CompiledPrefix};
 use crate::shortcut::ShortcutTarget;
 use crate::{IconSource, Layout, Modal, ModalOption, ModalSelection};
 use std::collections::HashMap;
+use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 /// Retry budget for fit-to-content resizes (frames). Covers the startup
 /// race where the window manager drops the first `InnerSize` while the
@@ -19,6 +21,12 @@ pub(crate) enum RowAction {
 
 pub(crate) struct ModalApp {
     modal: Modal,
+    /// Options still arriving for [`Modal::run_streaming`].
+    options_rx: Option<Receiver<Vec<ModalOption>>>,
+    /// True until the first streaming options batch arrives.
+    loading: bool,
+    /// Shown while `loading` is true.
+    loading_message: String,
     query: String,
     cursor: usize,
     textures: HashMap<String, egui::TextureHandle>,
@@ -73,6 +81,7 @@ pub(crate) struct ModalApp {
     filter_fuzzy: bool,
     filter_enabled: bool,
     filter_max: Option<usize>,
+    filter_min_match_chars: Option<usize>,
     filter_visible: Vec<usize>,
     filter_initialized: bool,
     /// egui style persists across frames: applying it once avoids cloning
@@ -86,9 +95,27 @@ impl ModalApp {
         modal: Modal,
         result: Arc<Mutex<Option<ModalSelection>>>,
     ) -> Self {
+        Self::new_with_stream(cc, modal, result, None, String::new())
+    }
+
+    pub(crate) fn new_with_stream(
+        cc: &eframe::CreationContext<'_>,
+        modal: Modal,
+        result: Arc<Mutex<Option<ModalSelection>>>,
+        options_rx: Option<Receiver<Vec<ModalOption>>>,
+        loading_message: String,
+    ) -> Self {
         let query = modal.initial_query.clone();
+        let loading = options_rx.is_some() && modal.options.is_empty();
         let mut app = Self {
             modal,
+            options_rx,
+            loading,
+            loading_message: if loading_message.is_empty() {
+                "Loading…".to_string()
+            } else {
+                loading_message
+            },
             query,
             cursor: 0,
             textures: HashMap::new(),
@@ -113,6 +140,7 @@ impl ModalApp {
             filter_fuzzy: false,
             filter_enabled: true,
             filter_max: None,
+            filter_min_match_chars: None,
             filter_visible: Vec::new(),
             filter_initialized: false,
             style_applied: false,
@@ -139,16 +167,107 @@ impl ModalApp {
             cc.egui_ctx.set_fonts(fonts);
         }
         // Initial cursor honors `default_selected` when visible.
-        if let Some(want) = &app.modal.default_selected {
-            if let Some(pos) = app
-                .filter_visible
-                .iter()
-                .position(|&i| app.level_slice().get(i).is_some_and(|o| &o.id == want))
-            {
-                app.cursor = pos;
+        app.select_default();
+        app
+    }
+
+    /// Move the cursor to `default_selected`, if it is visible.
+    fn select_default(&mut self) {
+        let Some(want) = self.modal.default_selected.clone() else {
+            return;
+        };
+        if let Some(pos) = self
+            .filter_visible
+            .iter()
+            .position(|&i| self.level_slice().get(i).is_some_and(|o| o.id == want))
+        {
+            self.cursor = pos;
+        }
+    }
+
+    /// Fold in options that arrived for [`crate::Modal::run_streaming`].
+    ///
+    /// Returns `true` when the producer went away before sending anything and
+    /// the window was closed as cancelled.
+    fn poll_options(&mut self, ctx: &egui::Context) -> bool {
+        let Some(rx) = self.options_rx.take() else {
+            return false;
+        };
+        let mut latest = None;
+        loop {
+            match rx.try_recv() {
+                Ok(options) => latest = Some(options),
+                Err(TryRecvError::Empty) => {
+                    self.options_rx = Some(rx);
+                    break;
+                }
+                Err(TryRecvError::Disconnected) => break,
             }
         }
-        app
+        if let Some(options) = latest {
+            self.modal.options = options;
+            self.loading = false;
+            self.nav_path.clear();
+            self.cursor = 0;
+            self.remembered_columns = None;
+            self.refresh_level_caches();
+            self.filter_initialized = false;
+            self.refresh_filter_cache();
+            self.select_default();
+        }
+        if self.loading && self.options_rx.is_none() {
+            self.loading = false;
+            self.finish(None, ctx);
+            return true;
+        }
+        false
+    }
+
+    /// Apply the theme-derived egui style once; egui keeps it across frames.
+    fn apply_style_once(&mut self, ctx: &egui::Context, t: &crate::Theme) {
+        if self.style_applied {
+            return;
+        }
+        let mut style = (*ctx.style()).clone();
+        style.visuals.window_fill = t.background;
+        style.visuals.panel_fill = t.background;
+        style.visuals.selection.bg_fill = t.selected;
+        style.visuals.widgets.inactive.bg_fill = t.surface;
+        style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
+        style.visuals.widgets.active.bg_fill = t.selected;
+        ctx.set_style(style);
+        self.style_applied = true;
+    }
+
+    /// The first frame(s) of [`crate::Modal::run_streaming`]: a themed window
+    /// with a message instead of the picker. Only Esc is meaningful.
+    fn show_loading(&self, ctx: &egui::Context, t: &crate::Theme) {
+        let frame = egui::Frame::new()
+            .fill(t.background)
+            .corner_radius(t.corner_radius)
+            .inner_margin(t.padding)
+            .outer_margin(t.margin);
+        egui::CentralPanel::default().frame(frame).show(ctx, |ui| {
+            ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
+            ui.vertical_centered(|ui| {
+                ui.add_space((ui.available_height() * 0.38).max(8.0));
+                ui.add(
+                    egui::Spinner::new()
+                        .size(t.font_size * 1.6)
+                        .color(t.dim_text),
+                );
+                ui.add_space(10.0);
+                ui.colored_label(t.dim_text, &self.loading_message);
+                ui.add_space(6.0);
+                ui.label(
+                    egui::RichText::new("Esc to cancel")
+                        .size(t.font_size * 0.78)
+                        .color(t.dim_text),
+                );
+            });
+        });
+        // Keep polling the channel: the producer cannot wake egui itself.
+        ctx.request_repaint_after(Duration::from_millis(50));
     }
 
     /// Options of the currently shown level (root when `nav_path` is empty).
@@ -244,12 +363,14 @@ impl ModalApp {
         let case_sensitive = self.modal.search.case_sensitive;
         let fuzzy = self.modal.search.fuzzy;
         let max = self.modal.max_results;
+        let min_match_chars = self.modal.search.min_match_chars;
         if self.filter_initialized
             && self.filter_query == self.query
             && self.filter_case_sensitive == case_sensitive
             && self.filter_fuzzy == fuzzy
             && self.filter_enabled == enabled
             && self.filter_max == max
+            && self.filter_min_match_chars == min_match_chars
         {
             return;
         }
@@ -271,7 +392,13 @@ impl ModalApp {
             }
         }
         let lowered = &self.level_lowered;
-        let mut visible: Vec<usize> = if !enabled || query.is_empty() {
+        // Hidden default view: short (or empty) queries reveal only exact
+        // label/id matches; from `min` characters on, the normal rules apply.
+        let hidden_short =
+            enabled && min_match_chars.is_some_and(|m| query.trim().chars().count() < m);
+        let mut visible: Vec<usize> = if hidden_short {
+            crate::search::exact_match_indices(level, &query, case_sensitive)
+        } else if !enabled || query.is_empty() {
             (0..level.len()).collect()
         } else if fuzzy {
             let mut scored: Vec<(usize, i32)> = level
@@ -306,12 +433,19 @@ impl ModalApp {
         self.filter_fuzzy = fuzzy;
         self.filter_enabled = enabled;
         self.filter_max = max;
+        self.filter_min_match_chars = min_match_chars;
         self.filter_initialized = true;
     }
 
     fn visible_indices(&mut self) -> Vec<usize> {
         self.refresh_filter_cache();
         self.filter_visible.clone()
+    }
+
+    /// Whether the empty-state message applies. An untouched (empty or
+    /// whitespace-only) search field must stay blank.
+    fn shows_empty_message(&self) -> bool {
+        !self.query.trim().is_empty()
     }
 
     fn activate(&self, visible: &[usize], pos: usize) -> Option<RowAction> {
@@ -916,6 +1050,23 @@ impl eframe::App for ModalApp {
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Options may still be arriving (run_streaming): fold them in first so
+        // shortcuts and rendering see the current list.
+        if self.poll_options(ctx) {
+            return;
+        }
+        if self.loading {
+            // Only Esc is meaningful while waiting for the first batch.
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+                self.finish(None, ctx);
+                return;
+            }
+            let t = self.modal.theme.clone();
+            self.apply_style_once(ctx, &t);
+            self.show_loading(ctx, &t);
+            return;
+        }
+
         // File-configured shortcuts win over the built-in keys so a user can
         // rebind them (e.g. make `Enter` do something else). Checked first.
         if self.fire_shortcut(ctx) {
@@ -941,6 +1092,7 @@ impl eframe::App for ModalApp {
             ctrl_n,
             ctrl_p,
             ctrl_u,
+            tab,
         ) = ctx.input_mut(|i| {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
@@ -956,11 +1108,22 @@ impl eframe::App for ModalApp {
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::N),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::P),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::U),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Tab),
             )
         });
         if ctrl_u {
             self.query.clear();
             self.cursor = 0;
+        }
+        // Tab completes the prefix the user is typing (`>sh` → `>show items`).
+        // Consumed above, so the text field never inserts a tab.
+        let mut tab_completed = false;
+        if tab {
+            if let Some(cp) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
+                self.query = cp.prefix.clone();
+                self.cursor = 0;
+                tab_completed = true;
+            }
         }
         if esc {
             if self.nav_path.is_empty() {
@@ -1102,17 +1265,7 @@ impl eframe::App for ModalApp {
         // Styling. egui retains the style across frames, so set it once:
         // cloning + installing the whole `Style` every frame invalidates
         // visuals at 60Hz for a theme that never changes mid-modal.
-        if !self.style_applied {
-            let mut style = (*ctx.style()).clone();
-            style.visuals.window_fill = t.background;
-            style.visuals.panel_fill = t.background;
-            style.visuals.selection.bg_fill = t.selected;
-            style.visuals.widgets.inactive.bg_fill = t.surface;
-            style.visuals.widgets.hovered.bg_fill = t.selected.linear_multiply(0.85);
-            style.visuals.widgets.active.bg_fill = t.selected;
-            ctx.set_style(style);
-            self.style_applied = true;
-        }
+        self.apply_style_once(ctx, &t);
 
         // One input poll per frame; rows/tiles receive the bool instead of
         // each locking `ctx.input` themselves (O(n) locks per frame).
@@ -1183,14 +1336,33 @@ impl eframe::App for ModalApp {
                 if resp.changed() {
                     self.cursor = 0;
                 }
+                // Tab replaced the buffer text before this field was drawn, so
+                // move the editing cursor to the end of the completed prefix.
+                if tab_completed {
+                    if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), self.search_id) {
+                        let end = egui::text::CCursor::new(self.query.chars().count());
+                        state
+                            .cursor
+                            .set_char_range(Some(egui::text::CCursorRange::one(end)));
+                        state.store(ui.ctx(), self.search_id);
+                    }
+                    resp.request_focus();
+                }
                 ui.add_space(8.0);
-                // Active prefix: Enter runs it instead of picking a row.
+                // Active prefix: Enter runs it. Partial prefix: Tab completes
+                // it to the shortest registered match.
+                let mut hints: Vec<String> = Vec::new();
                 if let Some((p, _)) =
                     prefix::match_prefix(&self.modal.compiled_prefixes, &self.query)
                 {
-                    let hint = p.hint.clone();
+                    hints.push(format!("↵ run \"{}\"", p.hint));
+                }
+                if let Some(c) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
+                    hints.push(format!("Tab ⇥ complete \"{}\"", c.prefix));
+                }
+                if !hints.is_empty() {
                     ui.label(
-                        egui::RichText::new(format!("↵ run \"{hint}\""))
+                        egui::RichText::new(hints.join("  ·  "))
                             .size(t.font_size * 0.8)
                             .color(t.dim_text),
                     );
@@ -1206,10 +1378,15 @@ impl eframe::App for ModalApp {
             // frame behind typing.
             let visible = self.visible_indices();
             if visible.is_empty() {
-                let msg = self.modal.empty_message.clone();
-                ui.colored_label(t.dim_text, &msg);
-                if self.modal.allow_custom_input && !self.query.is_empty() {
-                    ui.colored_label(t.dim_text, format!("Enter ↵: use \"{}\"", self.query));
+                // An empty query is the "nothing filtered yet" state (e.g. a
+                // hidden list or a loading modal), not a failed search: stay
+                // blank instead of claiming "No matches".
+                if self.shows_empty_message() {
+                    let msg = self.modal.empty_message.clone();
+                    ui.colored_label(t.dim_text, &msg);
+                    if self.modal.allow_custom_input && !self.query.is_empty() {
+                        ui.colored_label(t.dim_text, format!("Enter ↵: use \"{}\"", self.query));
+                    }
                 }
             } else if matches!(self.modal.layout, Layout::Grid) {
                 self.show_grid(ctx, ui, &visible, &t, hover_fresh);

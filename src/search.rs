@@ -14,6 +14,15 @@ pub struct SearchConfig {
     /// `true` = subsequence fuzzy match (ranked best-first) instead of
     /// substring match. Defaults to false (previous behavior).
     pub fuzzy: bool,
+    /// Hide the full list until the query reaches this many characters.
+    ///
+    /// While the query is shorter (including empty), only options whose label
+    /// or id equals the query are listed, so an empty query shows nothing.
+    /// Longer queries use the normal match rules. Defaults to `None`, which
+    /// keeps the usual behavior of listing everything for an empty query.
+    ///
+    /// Set it with [`crate::Modal::min_match_chars`].
+    pub min_match_chars: Option<usize>,
 }
 
 impl Default for SearchConfig {
@@ -24,6 +33,7 @@ impl Default for SearchConfig {
             case_sensitive: false,
             autofocus: true,
             fuzzy: false,
+            min_match_chars: None,
         }
     }
 }
@@ -78,6 +88,38 @@ pub fn fuzzy_score(text: &str, query: &str, case_sensitive: bool) -> Option<i32>
     Some(score - first * 2 - len_penalty / 8)
 }
 
+/// Indices whose label or id equals `query` exactly.
+///
+/// Used while [`SearchConfig::min_match_chars`] is hiding the full list: a
+/// short query must not reveal items by substring, but an item the user typed
+/// in full is still offered. Case-insensitive by default, like the search.
+pub(crate) fn exact_match_indices(
+    options: &[ModalOption],
+    query: &str,
+    case_sensitive: bool,
+) -> Vec<usize> {
+    let query = query.trim();
+    if query.is_empty() {
+        return Vec::new();
+    }
+    let lowered = (!case_sensitive).then(|| query.to_lowercase());
+    options
+        .iter()
+        .enumerate()
+        .filter(|(_, o)| {
+            if o.separator || o.unsearchable {
+                return false;
+            }
+            let equals = |text: &str| match &lowered {
+                Some(q) => text.to_lowercase() == *q,
+                None => text == query,
+            };
+            equals(&o.label) || equals(&o.id)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
 /// Pure, GUI-free filtering used by the app and unit tests.
 ///
 /// Substring match over label + id + description.
@@ -102,6 +144,13 @@ pub fn filter_options(options: &[ModalOption], query: &str, case_sensitive: bool
 /// Config-aware filtering: substring (default, order-preserving) or fuzzy
 /// (`fuzzy: true`, ranked best-first, stable on ties).
 pub fn filter_options_with(options: &[ModalOption], query: &str, cfg: &SearchConfig) -> Vec<usize> {
+    // Hidden default view: a short (or empty) query reveals only exact
+    // label/id matches instead of every option.
+    if let Some(min) = cfg.min_match_chars {
+        if query.trim().chars().count() < min {
+            return exact_match_indices(options, query, cfg.case_sensitive);
+        }
+    }
     if query.is_empty() {
         return (0..options.len()).collect();
     }

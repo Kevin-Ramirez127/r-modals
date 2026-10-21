@@ -210,6 +210,27 @@ pub(crate) fn sort_longest_first(out: &mut [CompiledPrefix]) {
     out.sort_by_key(|p| std::cmp::Reverse(p.prefix.len()));
 }
 
+/// Find the registered prefix closest to what the user is typing, for Tab
+/// completion.
+///
+/// A candidate starts with the query (letter by letter, via `starts_with`).
+/// An exact match is not a completion, and an empty query never completes.
+/// The shortest candidate wins, so the completion adds as few characters as
+/// possible; ties keep the registered order.
+pub(crate) fn completion<'a>(
+    prefixes: &'a [CompiledPrefix],
+    query: &str,
+) -> Option<&'a CompiledPrefix> {
+    let q = query.trim_start();
+    if q.is_empty() {
+        return None;
+    }
+    prefixes
+        .iter()
+        .filter(|p| p.prefix != q && p.prefix.starts_with(q))
+        .min_by_key(|p| p.prefix.len())
+}
+
 /// Find the prefix a query starts with, returning it and the trimmed
 /// remainder. Longest matching prefix wins; leading whitespace on the query
 /// is ignored. `None` when no prefix matches.

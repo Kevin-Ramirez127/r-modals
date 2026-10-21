@@ -197,3 +197,38 @@ fn load_prefixes_file_reads_and_reports_missing() {
     assert!(load_prefixes_file(&dir.join("missing.toml")).is_err());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn completion_uses_starts_with_and_prefers_the_shortest() {
+    let prefixes = vec![
+        compiled(">show items", shell("true")),
+        compiled(">sync", shell("true")),
+        compiled(">s", shell("true")),
+        compiled(">lock", shell("true")),
+    ];
+    // Letter by letter: only registered prefixes that start with the query.
+    assert_eq!(
+        completion(&prefixes, ">sh").map(|p| p.prefix.as_str()),
+        Some(">show items")
+    );
+    assert_eq!(
+        completion(&prefixes, ">sy").map(|p| p.prefix.as_str()),
+        Some(">sync")
+    );
+    // `>s` is exact (not a completion), but it also starts `>sync`, which is
+    // the closest longer candidate.
+    assert_eq!(
+        completion(&prefixes, ">s").map(|p| p.prefix.as_str()),
+        Some(">sync")
+    );
+    // Leading whitespace is ignored, like `match_prefix`.
+    assert_eq!(
+        completion(&prefixes, "  >l").map(|p| p.prefix.as_str()),
+        Some(">lock")
+    );
+    assert!(completion(&prefixes, ">lock").is_none());
+    assert!(completion(&prefixes, "").is_none());
+    assert!(completion(&prefixes, "   ").is_none());
+    assert!(completion(&prefixes, ">zz").is_none());
+    assert!(completion(&prefixes, ">SH").is_none());
+}

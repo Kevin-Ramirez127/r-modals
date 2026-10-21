@@ -915,3 +915,79 @@ fn run_prefix_builds_selection_with_remainder() {
     assert_eq!(sel.path, vec![1, 2]);
     assert!(sel.custom_input);
 }
+
+#[test]
+fn streaming_options_fill_the_loading_modal() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let modal = Modal::new("Search").loading_message("Loading…");
+    let mut app = ModalApp::new_with_stream(&cc, modal, result, Some(rx), "Loading…".into());
+
+    assert!(app.loading);
+    assert!(app.modal.options.is_empty());
+
+    tx.send(vec![
+        ModalOption::new("a", "Alpha"),
+        ModalOption::new("b", "Beta"),
+    ])
+    .unwrap();
+    assert!(!app.poll_options(&ctx));
+    assert!(!app.loading);
+    assert_eq!(app.modal.options.len(), 2);
+    assert_eq!(app.modal.options[0].label, "Alpha");
+}
+
+#[test]
+fn streaming_disconnect_while_loading_cancels() {
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let (tx, rx) = std::sync::mpsc::channel::<Vec<ModalOption>>();
+    let modal = Modal::new("Search").loading_message("Loading…");
+    let mut app = ModalApp::new_with_stream(&cc, modal, result, Some(rx), "Loading…".into());
+
+    drop(tx);
+    assert!(app.poll_options(&ctx));
+    assert!(!app.loading);
+}
+
+#[test]
+fn empty_search_field_hides_the_empty_message() {
+    let (_, mut app, _) = grid_app(0, true);
+    app.query.clear();
+    assert!(!app.shows_empty_message());
+    app.query = "   ".to_string();
+    assert!(!app.shows_empty_message());
+
+    app.query = "ab".to_string();
+    assert!(app.shows_empty_message());
+}
+
+/// Tab completes a partially typed prefix and leaves the cursor at the end.
+#[test]
+fn tab_completes_the_closest_prefix() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app(
+        "[[prefix]]\nprefix = \">sync\"\nshell = \"true\"\n\
+         [[prefix]]\nprefix = \">show items\"\nshell = \"true\"\n",
+    );
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = ">sh".to_string();
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::Tab));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+
+    assert_eq!(app.query, ">show items");
+    let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    let range = state.cursor.char_range().expect("cursor range");
+    assert_eq!(range.primary.index, app.query.chars().count());
+    assert_eq!(range.secondary.index, app.query.chars().count());
+}

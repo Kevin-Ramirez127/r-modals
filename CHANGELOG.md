@@ -3,6 +3,11 @@
 ## 0.2.0 — unreleased
 
 ### Picker UX
+- `Modal::min_match_chars(n)` hides the full list until the query reaches `n`
+  characters; shorter queries show only exact label/id matches (empty query:
+  nothing), so sensitive lists stay out of view
+- The empty-state message (".empty_message(..)") is only shown once the query
+  is non-empty; an untouched search field stays blank
 - Fuzzy subsequence match (`Modal::fuzzy`, ranked best-first) alongside substring search
 - `ModalOption::disabled`, `ModalOption::separator`, `ModalOption::shortcut`,
   `ModalOption::keywords`/`keyword` (matched in both search modes)
@@ -10,6 +15,11 @@
   `Modal::empty_message`, `Modal::footer_hint`, `Modal::max_results`
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
 - First-query-occurrence highlight (underline, no layout shift)
+
+### Streaming options
+- `Modal::run_streaming(rx)` opens the window immediately and fills it from a
+  `Receiver<Vec<ModalOption>>`; `Modal::loading_message(text)` sets the themed
+  spinner/message shown until the first batch arrives (Esc cancels)
 
 ### Configurable shortcuts
 - File-driven key bindings: `Modal::shortcuts_file(path)`, `Modal::shortcuts_toml(text)`,
@@ -39,6 +49,9 @@
 - Typing a registered prefix and pressing `Enter` runs its action with the
   text after the prefix (the remainder) and closes the modal without a pick —
   the same contract as a standalone shortcut action
+- Typing a partial prefix shows the closest registered prefix as a hint
+  (`starts_with`, shortest completion wins); `Tab` completes the search field
+  to it and leaves the cursor at the end
 - `{query}` in `args`/`shell` is replaced by the remainder (shell-quoted in
   `shell`); without a placeholder the remainder is appended (a trailing
   argument for `command`, a single quoted word for `shell`). Longest matching

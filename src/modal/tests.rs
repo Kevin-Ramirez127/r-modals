@@ -374,3 +374,25 @@ fn history_sorts_most_used_first() {
     assert_eq!(counts.get("b"), Some(&5));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn min_match_chars_hides_the_full_list() {
+    let m = Modal::new("x")
+        .options([
+            ModalOption::new("gh", "GitHub"),
+            ModalOption::new("gl", "GitLab"),
+        ])
+        .min_match_chars(3);
+    assert_eq!(m.search.min_match_chars, Some(3));
+    assert!(m.filtered_indices("").is_empty());
+    assert!(m.filtered_indices("gi").is_empty());
+    assert_eq!(m.filtered_indices("GitLab"), vec![1]);
+    assert_eq!(m.filtered_indices("git"), vec![0, 1]);
+
+    // Zero disables the behavior (plain empty-query listing).
+    let off = Modal::new("x")
+        .option(ModalOption::new("gh", "GitHub"))
+        .min_match_chars(0);
+    assert_eq!(off.search.min_match_chars, None);
+    assert_eq!(off.filtered_indices(""), vec![0]);
+}

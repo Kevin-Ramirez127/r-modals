@@ -9,10 +9,10 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Submenus** — nest options with `.sub_option(...)` for drill-down navigation
 - **Actions** — run a command, shell one-liner, or Rust closure on select
 - **Shortcuts** — bind keys to an option id or a terminal command/shell from a TOML file (`Modal::shortcuts_file`, `Modal::shortcuts_toml`, `Modal::shortcut`); bound keys are consumed before the built-in ones and show up as row hints
-- **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query
+- **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query. While typing, the closest matching prefix is hinted and `Tab` completes it
 - **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
-- **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
+- **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
 - **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`
 - **Layouts** — `List` rows or `Grid` image tiles
 - **CSS themes** — style with real CSS via `.stylesheet(...)`; built-ins: `Theme::dark()`, `Theme::light()`, `Theme::transparent_dark()`, `Theme::auto()`
@@ -106,6 +106,14 @@ let sel = Modal::new("Launcher")
 ```
 
 A prefix can also run a Rust closure via `Modal::prefix_action(prefix, SelectAction::Callback(..))`; the closure reads the remainder from `selection.query`.
+
+While you type, the picker hints the closest registered prefix that starts with
+the query (letter by letter, like `str::starts_with`). Press `Tab` to complete
+the search field to it; the cursor moves to the end so you can keep typing the
+remainder. The shortest candidate wins, so `>sh` completes to `>show items`
+while `>s` completes to `>sync`. An exact prefix is never a completion, but if
+it is also the start of a longer one both hints are shown (`Enter` runs the
+exact prefix, `Tab` extends it).
 
 `{query}` is replaced by the remainder. In `shell` it is inserted shell-quoted (don't wrap it in quotes yourself); when an action sets no `{query}` the remainder is appended — a trailing argument for `command`, a single quoted word for `shell`. A bare prefix (empty remainder) still runs its action, and the longest matching prefix wins (`>>` beats `>`). A missing/invalid file makes `run()` return `ModalError::Prefixes`. CLI: `r-modals --dmenu --prefixes FILE` (or `--no-prefixes` to skip the default file). See `examples/assets/prefixes.toml` for the full reference.
 
