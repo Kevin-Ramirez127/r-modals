@@ -149,6 +149,7 @@ fn callback_executes_with_selection() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     opt.action.as_ref().unwrap().execute(&sel).unwrap();
     assert_eq!(*seen.lock().unwrap(), vec!["ff".to_string()]);
@@ -170,6 +171,7 @@ fn on_error_defaults_none_and_debugs() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     assert!(opt.action.as_ref().unwrap().execute(&sel).is_err());
 }

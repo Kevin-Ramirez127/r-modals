@@ -5,6 +5,10 @@
 //!
 //! - `option = "<id>"` — activate the modal option with that id (drill into a
 //!   submenu, or pick a leaf and fire its action);
+//! - `pick = "<tag>"` — pick the row that is currently highlighted, tagging the
+//!   resulting [`crate::ModalSelection::shortcut`] with `<tag>` so the caller
+//!   can vary what the same selection means (e.g. `Shift+Enter` copies the
+//!   username instead of the password);
 //! - `command = "<program>"` (+ optional `args = [..]`) — spawn a detached
 //!   terminal command;
 //! - `shell = "<one-liner>"` — run a detached shell command.
@@ -13,6 +17,10 @@
 //! [[shortcut]]
 //! key = "Ctrl+O"
 //! option = "firefox"
+//!
+//! [[shortcut]]
+//! key = "Shift+Enter"
+//! pick = "username"
 //!
 //! [[shortcut]]
 //! key = "Ctrl+Shift+T"
@@ -47,6 +55,10 @@ pub struct ShortcutSpec {
     /// Id of an option in the modal to activate when pressed.
     #[serde(default)]
     pub option: Option<String>,
+    /// Pick the currently highlighted row and tag the selection with this
+    /// value (see [`crate::ModalSelection::shortcut`]).
+    #[serde(default)]
+    pub pick: Option<String>,
     /// Program to spawn (with `args`) when pressed.
     #[serde(default)]
     pub command: Option<String>,
@@ -68,6 +80,15 @@ impl ShortcutSpec {
         Self {
             key: key.into(),
             option: Some(id.into()),
+            ..Self::default()
+        }
+    }
+
+    /// Bind `key` to picking the currently highlighted row, tagged `tag`.
+    pub fn pick(key: impl Into<String>, tag: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            pick: Some(tag.into()),
             ..Self::default()
         }
     }
@@ -182,6 +203,8 @@ pub fn default_shortcuts_path() -> Option<PathBuf> {
 pub(crate) enum ShortcutTarget {
     /// Activate the option with this id (drill or pick).
     Option(String),
+    /// Pick the highlighted row, tagging the selection with this value.
+    Pick(String),
     /// Spawn a detached command / shell.
     Action(SelectAction),
 }
@@ -287,22 +310,26 @@ pub(crate) fn compile(spec: &ShortcutSpec) -> Result<CompiledShortcut, String> {
         spec.option.as_deref(),
         spec.command.as_deref(),
         spec.shell.as_deref(),
+        spec.pick.as_deref(),
     ) {
-        (Some(id), None, None) => ShortcutTarget::Option(id.to_string()),
-        (None, Some(prog), None) => ShortcutTarget::Action(SelectAction::Command {
+        (Some(id), None, None, None) => ShortcutTarget::Option(id.to_string()),
+        (None, None, None, Some(tag)) => ShortcutTarget::Pick(tag.to_string()),
+        (None, Some(prog), None, None) => ShortcutTarget::Action(SelectAction::Command {
             program: prog.to_string(),
             args: spec.args.clone(),
         }),
-        (None, None, Some(cmd)) => ShortcutTarget::Action(SelectAction::Shell(cmd.to_string())),
-        (None, None, None) => {
+        (None, None, Some(cmd), None) => {
+            ShortcutTarget::Action(SelectAction::Shell(cmd.to_string()))
+        }
+        (None, None, None, None) => {
             return Err(format!(
-                "shortcut {} sets none of option/command/shell",
+                "shortcut {} sets none of option/pick/command/shell",
                 spec.key
             ))
         }
         _ => {
             return Err(format!(
-                "shortcut {} must set exactly one of option/command/shell",
+                "shortcut {} must set exactly one of option/pick/command/shell",
                 spec.key
             ))
         }

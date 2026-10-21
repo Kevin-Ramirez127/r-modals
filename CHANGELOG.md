@@ -28,6 +28,9 @@
 - Shortcut keys are consumed before the built-in keys (can rebind `Enter`); the
   most specific combo wins (`Ctrl+Shift+S` before `Ctrl+S`)
 - Bound `option` shortcuts auto-fill the row's right-aligned hint
+- `pick = "<tag>"` binds a key to picking the highlighted row while tagging the
+  selection (`ModalSelection::shortcut`), so the same pick can mean something
+  else (e.g. `Shift+Enter` copies the username instead of the password)
 - Auto-loads `$XDG_CONFIG_HOME/r-modals/shortcuts.toml` (or
   `~/.config/r-modals/shortcuts.toml`) when present; disable with
   `Modal::auto_shortcuts(false)`

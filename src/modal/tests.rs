@@ -44,6 +44,7 @@ fn dispatch_action_falls_back_on_spawn_failure() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     // No panic without a handler either.
     let bare = Modal::new("y")
@@ -89,6 +90,7 @@ fn dispatch_action_skips_fallback_on_success() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     Modal::dispatch_action(&m.collect_actions(), &sel);
     assert!(!*fired.lock().unwrap());
@@ -320,6 +322,7 @@ fn prefix_action_accepts_callbacks_and_rejects_empty_prefix() {
         path: Vec::new(),
         query: "ls -la".to_string(),
         custom_input: true,
+        shortcut: None,
     };
     m.compiled_prefixes[0].execute(&sel, "ls -la").unwrap();
     assert_eq!(*seen.lock().unwrap(), vec!["ls -la".to_string()]);

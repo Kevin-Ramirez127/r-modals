@@ -136,6 +136,22 @@ fn compile_rejects_ambiguous_or_incomplete_specs() {
     let mut stray_args = ShortcutSpec::option("Ctrl+O", "ff");
     stray_args.args.push("--nope".to_string());
     assert!(compile(&stray_args).is_err());
+
+    // `pick` competes with the other targets for "exactly one".
+    let mut both = ShortcutSpec::pick("Shift+Enter", "username");
+    both.shell = Some("echo hi".to_string());
+    assert!(compile(&both).is_err());
+}
+
+#[test]
+fn compile_pick_targets_the_highlighted_row() {
+    let compiled = compile(&ShortcutSpec::pick("Shift+Enter", "username")).unwrap();
+    assert_eq!(compiled.key, egui::Key::Enter);
+    assert!(compiled.modifiers.shift);
+    match compiled.target {
+        ShortcutTarget::Pick(tag) => assert_eq!(tag, "username"),
+        other => panic!("expected a pick target, got {other:?}"),
+    }
 }
 
 #[test]
