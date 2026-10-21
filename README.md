@@ -52,7 +52,7 @@ if let Some(sel) = choice {
 ```
 
 Keys: type to filter, ↑/↓ navigate, Enter pick, Esc cancel. Mouse hover + click works too.
-Extras: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P` move; `Ctrl+U` clears the query; `Space` toggles in `run_multi()`.
+While the search field has text, `←`/`→`/`Home`/`End` edit its caret; with an empty query they navigate rows (`←`/`→` also back out of/drill into submenus). `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P` move rows; `Ctrl+U` clears the query; `Space` toggles in `run_multi()`.
 
 ## Shortcuts
 

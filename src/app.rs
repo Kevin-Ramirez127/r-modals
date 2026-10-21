@@ -1112,6 +1112,14 @@ impl eframe::App for ModalApp {
 
         let t = self.modal.theme.clone();
 
+        // While the search field has text and focus, Left/Right/Home/End
+        // belong to the text cursor. The list navigation shortcuts only take
+        // them when the field is empty (or not focused), which keeps editing
+        // and list/submenu movement from fighting over the same keys.
+        let editing_text = self.modal.search.enabled
+            && !self.query.is_empty()
+            && ctx.memory(|m| m.has_focus(self.search_id));
+
         // Global keys — consumed under a single input lock instead of one
         // lock per key.
         let (
@@ -1133,12 +1141,12 @@ impl eframe::App for ModalApp {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::End),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::N),

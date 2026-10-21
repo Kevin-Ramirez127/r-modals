@@ -34,6 +34,8 @@
 ### Picker UX
 - `Tab` completes a partial registered prefix first; when there is no prefix
   completion, it completes the search field with the focused row's label
+- `Left`/`Right`/`Home`/`End` move the query caret while the search field has
+  text; with an empty query they still navigate rows and submenus
 - `Modal::min_match_chars(n)` hides the full list until the query reaches `n`
   characters; shorter queries show only exact label/id matches (empty query:
   nothing), so sensitive lists stay out of view
