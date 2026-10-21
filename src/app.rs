@@ -442,6 +442,19 @@ impl ModalApp {
         self.filter_visible.clone()
     }
 
+    /// Label of the row under the cursor, for Tab completion. Empty queries
+    /// and an already-complete label produce no completion, so Tab keeps its
+    /// prefix-completion meaning and never clears an untouched field.
+    fn focused_item_label(&mut self) -> Option<String> {
+        if self.query.trim().is_empty() {
+            return None;
+        }
+        let visible = self.visible_indices();
+        let &idx = visible.get(self.cursor)?;
+        let label = self.level_opt(idx)?.label.clone();
+        (!label.is_empty() && label != self.query).then_some(label)
+    }
+
     /// Whether the empty-state message applies. An untouched (empty or
     /// whitespace-only) search field must stay blank.
     fn shows_empty_message(&self) -> bool {
@@ -1146,6 +1159,13 @@ impl eframe::App for ModalApp {
                 self.query = cp.prefix.clone();
                 self.cursor = 0;
                 tab_completed = true;
+            } else if let Some(label) = self.focused_item_label() {
+                // No prefix to finish: complete the search with the focused
+                // row instead. Counted as a normal programmatic edit below so
+                // the text cursor lands at the end of the label.
+                self.query = label;
+                self.cursor = 0;
+                tab_completed = true;
             }
         }
         if esc {
@@ -1383,6 +1403,8 @@ impl eframe::App for ModalApp {
                 }
                 if let Some(c) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
                     hints.push(format!("Tab ⇥ complete \"{}\"", c.prefix));
+                } else if let Some(label) = self.focused_item_label() {
+                    hints.push(format!("Tab ⇥ complete \"{label}\""));
                 }
                 if !hints.is_empty() {
                     ui.label(

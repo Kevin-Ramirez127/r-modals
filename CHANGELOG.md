@@ -32,6 +32,8 @@
 - `Prompt` input uses the themed search field styling
 
 ### Picker UX
+- `Tab` completes a partial registered prefix first; when there is no prefix
+  completion, it completes the search field with the focused row's label
 - `Modal::min_match_chars(n)` hides the full list until the query reaches `n`
   characters; shorter queries show only exact label/id matches (empty query:
   nothing), so sensitive lists stay out of view
@@ -65,7 +67,7 @@
   `Modal::auto_shortcuts(false)`
 - `ShortcutSpec`, `parse_shortcuts`, `load_shortcuts_file`, `default_shortcuts_path`;
   `ModalError::Shortcuts` for parse/validation failures; reference in `examples/assets/shortcuts.toml`
-- CLI: `r-modals --dmenu --shortcuts FILE` / `--no-shortcuts`
+- CLI: `r-modals --menu --shortcuts FILE` / `--no-shortcuts`
 
 ### New modal types
 - `Confirm::new(...).message(...).run() -> bool`
