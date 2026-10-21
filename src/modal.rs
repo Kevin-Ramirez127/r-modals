@@ -432,7 +432,8 @@ impl Modal {
 
     /// Add one prefix bound to a prebuilt [`SelectAction`] — including a Rust
     /// closure ([`SelectAction::Callback`]), which TOML cannot express. The
-    /// closure receives the query remainder as `selection.query`.
+    /// closure receives the query remainder (or the parameter typed after
+    /// `=`) as `selection.query`.
     ///
     /// ```no_run
     /// use r_modals::{Modal, SelectAction};

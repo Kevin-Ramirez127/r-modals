@@ -21,12 +21,14 @@
 //! ```
 //!
 //! The `{query}` token in `args`/`shell` (and in `command`) is replaced by
-//! the remainder — the text typed after the prefix, trimmed. In `shell` the
-//! remainder is inserted shell-quoted, so do not wrap `{query}` in quotes
-//! yourself. When an action sets no `{query}`, the remainder is appended
-//! instead: as one extra argument for `command`, or as a single shell-quoted
-//! word for `shell`. So `>` alone (empty remainder) still runs the bare
-//! action.
+//! the remainder — the text typed after the prefix, trimmed. An `=` directly
+//! after the prefix (optionally surrounded by spaces) delimits a parameter,
+//! so `>search=Hello World` passes `Hello World` without the `=`; the usual
+//! space-separated remainder keeps working. In `shell` the remainder is
+//! inserted shell-quoted, so do not wrap `{query}` in quotes yourself. When
+//! an action sets no `{query}`, the remainder is appended instead: as one
+//! extra argument for `command`, or as a single shell-quoted word for
+//! `shell`. So `>` alone (empty remainder) still runs the bare action.
 //!
 //! [`crate::Modal::prefixes_file`] loads a file, [`crate::Modal::prefixes_toml`]
 //! takes inline TOML, and [`crate::Modal::prefix`] adds one entry in code.
@@ -45,8 +47,9 @@ pub struct PrefixSpec {
     /// Program to spawn when the prefix is confirmed.
     #[serde(default)]
     pub command: Option<String>,
-    /// Arguments for `command`. `{query}` is replaced by the remainder; when
-    /// no argument contains it the remainder is appended as one argument.
+    /// Arguments for `command`. `{query}` is replaced by the remainder (the
+    /// text after the prefix, or the parameter after `=`); when no argument
+    /// contains it the remainder is appended as one argument.
     #[serde(default)]
     pub args: Vec<String>,
     /// Shell one-liner to run when the prefix is confirmed
@@ -233,7 +236,10 @@ pub(crate) fn completion<'a>(
 
 /// Find the prefix a query starts with, returning it and the trimmed
 /// remainder. Longest matching prefix wins; leading whitespace on the query
-/// is ignored. `None` when no prefix matches.
+/// is ignored. An `=` right after the prefix (spaces allowed around it)
+/// separates a parameter from the prefix and is not part of the remainder,
+/// so `>search=Hello World` yields `Hello World`. `None` when no prefix
+/// matches.
 pub(crate) fn match_prefix<'a>(
     prefixes: &'a [CompiledPrefix],
     query: &str,
@@ -247,11 +253,22 @@ pub(crate) fn match_prefix<'a>(
                 None => true,
             };
             if longer {
-                best = Some((p, rest.trim().to_string()));
+                best = Some((p, parameter(rest)));
             }
         }
     }
     best
+}
+
+/// Trim the text after a matched prefix and drop an optional `=` separator.
+/// Whitespace before and after the `=` is ignored; without one the rest is
+/// the plain space-separated remainder.
+fn parameter(rest: &str) -> String {
+    let rest = rest.trim_start();
+    match rest.strip_prefix('=') {
+        Some(param) => param.trim().to_string(),
+        None => rest.trim().to_string(),
+    }
 }
 
 /// Quote one word for the platform shell used by [`SelectAction::Shell`].

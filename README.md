@@ -9,7 +9,7 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Submenus** — nest options with `.sub_option(...)` for drill-down navigation
 - **Actions** — run a command, shell one-liner, or Rust closure on select
 - **Shortcuts** — bind keys to an option id or a terminal command/shell from a TOML file (`Modal::shortcuts_file`, `Modal::shortcuts_toml`, `Modal::shortcut`); bound keys are consumed before the built-in ones and show up as row hints
-- **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query. While typing, the closest matching prefix is hinted and `Tab` completes it
+- **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query, or pass a parameter explicitly with `>search=Hello World`. While typing, the closest matching prefix is hinted and `Tab` completes it
 - **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
 - **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
@@ -115,7 +115,7 @@ while `>s` completes to `>sync`. An exact prefix is never a completion, but if
 it is also the start of a longer one both hints are shown (`Enter` runs the
 exact prefix, `Tab` extends it).
 
-`{query}` is replaced by the remainder. In `shell` it is inserted shell-quoted (don't wrap it in quotes yourself); when an action sets no `{query}` the remainder is appended — a trailing argument for `command`, a single quoted word for `shell`. A bare prefix (empty remainder) still runs its action, and the longest matching prefix wins (`>>` beats `>`). A missing/invalid file makes `run()` return `ModalError::Prefixes`. CLI: `r-modals --dmenu --prefixes FILE` (or `--no-prefixes` to skip the default file). See `examples/assets/prefixes.toml` for the full reference.
+`{query}` is replaced by the remainder. In `shell` it is inserted shell-quoted (don't wrap it in quotes yourself); when an action sets no `{query}` the remainder is appended — a trailing argument for `command`, a single quoted word for `shell`. Put an `=` right after the prefix (spaces around it are fine) to pass an explicit parameter, so `>search=Hello World` hands `Hello World` to the action just like `>search Hello World`; the `=` itself is never part of it. A bare prefix (empty remainder) still runs its action, and the longest matching prefix wins (`>>` beats `>`). A missing/invalid file makes `run()` return `ModalError::Prefixes`. CLI: `r-modals --dmenu --prefixes FILE` (or `--no-prefixes` to skip the default file). See `examples/assets/prefixes.toml` for the full reference.
 
 ## Dialogs
 

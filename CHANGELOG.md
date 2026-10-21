@@ -51,7 +51,9 @@
   including a Rust closure that reads the remainder from `selection.query`
 - Typing a registered prefix and pressing `Enter` runs its action with the
   text after the prefix (the remainder) and closes the modal without a pick —
-  the same contract as a standalone shortcut action
+  the same contract as a standalone shortcut action. An `=` right after the
+  prefix (spaces allowed) delimits an explicit parameter, so
+  `>search=Hello World` passes `Hello World` without the `=`
 - Typing a partial prefix shows the closest registered prefix as a hint
   (`starts_with`, shortest completion wins); `Tab` completes the search field
   to it and leaves the cursor at the end

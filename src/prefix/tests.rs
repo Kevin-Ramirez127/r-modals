@@ -122,6 +122,43 @@ fn match_prefix_longest_wins_and_remainder_is_trimmed() {
 }
 
 #[test]
+fn match_prefix_equals_sign_delimits_parameter() {
+    let prefixes = vec![
+        compiled(">search", shell("true")),
+        compiled(">", shell("true")),
+    ];
+
+    // `=` separates the parameter from the prefix and is dropped.
+    let (p, rest) = match_prefix(&prefixes, ">search=Hello World").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello World");
+
+    // Spaces around the `=` are ignored.
+    let (p, rest) = match_prefix(&prefixes, "  >search =  Hello World  ").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello World");
+
+    // The longest registered prefix still wins with the parameter syntax.
+    let (p, rest) = match_prefix(&prefixes, ">search=deep").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "deep");
+
+    // An empty parameter matches the prefix and runs its bare action.
+    let (p, rest) = match_prefix(&prefixes, ">search=").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert!(rest.is_empty());
+
+    // Without `=`, the space-separated remainder keeps working unchanged.
+    let (p, rest) = match_prefix(&prefixes, ">search Hello").unwrap();
+    assert_eq!(p.prefix, ">search");
+    assert_eq!(rest, "Hello");
+
+    // The value may contain further `=` signs.
+    let (_, rest) = match_prefix(&prefixes, ">search=a=b").unwrap();
+    assert_eq!(rest, "a=b");
+}
+
+#[test]
 fn match_prefix_without_match_is_none() {
     let prefixes = vec![compiled(">", shell("true"))];
     assert!(match_prefix(&prefixes, "plain query").is_none());
