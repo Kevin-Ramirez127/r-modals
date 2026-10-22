@@ -716,6 +716,52 @@ fn submenu_list_arrows_navigate() {
     assert_eq!(app.cursor, 0);
 }
 
+/// Once the search field has text, Left/Right/Home/End move its caret instead
+/// of moving the row cursor. Empty-query list navigation remains covered by
+/// `submenu_list_arrows_navigate`.
+#[test]
+fn text_field_arrows_edit_the_query() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    assert!(ctx.memory(|m| m.has_focus(app.search_id)));
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(egui::Event::Text("Alpha".to_string()));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    assert_eq!(app.query, "Alpha");
+
+    let caret = |ctx: &egui::Context, app: &ModalApp| {
+        egui::TextEdit::load_state(ctx, app.search_id)
+            .and_then(|state| state.cursor.char_range())
+            .map(|range| range.primary.index)
+            .expect("text edit cursor")
+    };
+    assert_eq!(caret(&ctx, &app), 5);
+    let row = app.cursor;
+
+    for (key, expected) in [
+        (egui::Key::ArrowLeft, 4),
+        (egui::Key::Home, 0),
+        (egui::Key::End, 5),
+        (egui::Key::ArrowLeft, 4),
+        (egui::Key::ArrowRight, 5),
+    ] {
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(key_event(key));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(caret(&ctx, &app), expected, "caret after {key:?}");
+        assert_eq!(app.cursor, row, "row cursor moved after {key:?}");
+        assert_eq!(app.query, "Alpha");
+    }
+}
+
 #[test]
 fn stationary_pointer_does_not_block_keyboard() {
     use eframe::App as _;
@@ -1026,6 +1072,57 @@ fn empty_search_field_hides_the_empty_message() {
 
     app.query = "ab".to_string();
     assert!(app.shows_empty_message());
+}
+
+/// With no partial prefix, Tab completes the focused row's label.
+#[test]
+fn tab_completes_the_focused_item() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = "Al".to_string();
+    t += 1.0 / 60.0;
+    let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::Tab));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+
+    assert_eq!(app.query, "Alpha");
+    let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    let range = state.cursor.char_range().expect("cursor range");
+    assert_eq!(range.primary.index, app.query.chars().count());
+    assert_eq!(range.secondary.index, app.query.chars().count());
+}
+
+/// Tab completion prefers a partial prefix over the focused row.
+#[test]
+fn tab_prefers_a_prefix_completion_over_the_item() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app(
+        "[[prefix]]\nprefix = \">s\"\nshell = \"true\"\n         [[prefix]]\nprefix = \">sync\"\nshell = \"true\"\n",
+    );
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = ">s".to_string();
+    t += 1.0 / 60.0;
+    let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::Tab));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+
+    assert_eq!(app.query, ">sync");
 }
 
 /// Tab completes a partially typed prefix and leaves the cursor at the end.
