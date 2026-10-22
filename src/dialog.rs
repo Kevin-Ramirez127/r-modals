@@ -34,7 +34,7 @@
 //! cancel, `2` error.
 
 use std::ffi::OsString;
-use std::io::{self, BufRead, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -306,20 +306,19 @@ impl Dialog {
                 .map_err(|e| ModalError::Io(format!("cannot locate current executable: {e}")))?,
         };
         let mut cmd = Command::new(&program);
-        match &self.kind {
-            Kind::Menu => {
-                cmd.arg("--menu");
-            }
-            Kind::Ask(label) => {
-                cmd.arg("--ask").arg(label);
-            }
-            Kind::Confirm(title) => {
-                cmd.arg("--confirm").arg(title);
-            }
-            Kind::Error(message) => {
-                cmd.arg("--error").arg(message);
-            }
-        }
+        cmd.arg(match &self.kind {
+            Kind::Menu => "--menu",
+            Kind::Ask(_) => "--ask",
+            Kind::Confirm(_) => "--confirm",
+            Kind::Error(_) => "--error",
+        });
+        // The label/title/message is passed as a positional *after* `--` at
+        // the end of the argument list. Otherwise a title like `--password`
+        // would be parsed as a child flag (argument injection).
+        let positional = match &self.kind {
+            Kind::Menu => None,
+            Kind::Ask(text) | Kind::Confirm(text) | Kind::Error(text) => Some(text),
+        };
         if let Some(id) = &self.app_id {
             cmd.arg("--app-id").arg(id);
         }
@@ -341,6 +340,10 @@ impl Dialog {
             cmd.arg("--format").arg("json");
         }
         cmd.args(&self.args);
+
+        if let Some(text) = positional {
+            cmd.arg("--").arg(text);
+        }
 
         if matches!(&self.kind, Kind::Menu) {
             cmd.stdin(Stdio::piped());
@@ -451,8 +454,7 @@ impl DialogSession {
         let Some(child) = self.child.take() else {
             return Err(ModalError::Protocol("dialog was already waited on".into()));
         };
-        let out = child
-            .wait_with_output()
+        let out = wait_with_output_limited(child)
             .map_err(|e| ModalError::Io(format!("dialog wait failed: {e}")))?;
         self.remove_pid();
 
@@ -547,13 +549,69 @@ impl Drop for DialogSession {
     }
 }
 
-/// Replace characters that would break the line protocol.
+/// Maximum bytes retained from each child stdout/stderr pipe. A dialog
+/// protocol reply is a few KiB; this only guards against a broken (or hostile
+/// `.program(..)`) child flooding the parent's heap.
+const MAX_CHILD_OUTPUT: usize = 16 * 1024 * 1024;
+
+/// Like [`Child::wait_with_output`], but drains both pipes through a bounded
+/// buffer. Reading continues past the cap (and is discarded) so a flooding
+/// child can still finish instead of blocking on a full pipe.
+fn wait_with_output_limited(mut child: Child) -> io::Result<std::process::Output> {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let stdout_reader = stdout.map(|r| std::thread::spawn(move || read_all_limited(r)));
+    let stderr_reader = stderr.map(|r| std::thread::spawn(move || read_all_limited(r)));
+
+    let status = child.wait()?;
+    let join = |handle: Option<std::thread::JoinHandle<io::Result<Vec<u8>>>>| {
+        handle
+            .map(|h| {
+                h.join()
+                    .unwrap_or_else(|_| Err(io::Error::other("dialog output reader panicked")))
+            })
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let stdout = join(stdout_reader)?;
+    let stderr = join(stderr_reader)?;
+    Ok(std::process::Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_all_limited<R: Read>(reader: R) -> io::Result<Vec<u8>> {
+    read_all_capped(reader, MAX_CHILD_OUTPUT)
+}
+
+fn read_all_capped<R: Read>(mut reader: R, limit: usize) -> io::Result<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut buf = [0u8; 8192];
+    loop {
+        let n = reader.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        let room = limit.saturating_sub(out.len());
+        out.extend_from_slice(&buf[..n.min(room)]);
+    }
+    Ok(out)
+}
+
+/// Replace characters that would break the line protocol or let untrusted
+/// labels emit terminal escape sequences (`ESC[2J`, OSC clipboard writes, …).
+///
+/// Tabs are meaningful in labels (they separate the optional `id` field), so
+/// they survive there but are replaced in ids and other single-line fields.
 fn sanitize(text: &str, is_id: bool) -> String {
     text.chars()
         .map(|c| match c {
-            '\n' | '\r' => ' ',
             '\t' if is_id => ' ',
-            _ => c,
+            '\t' => '\t',
+            c if c.is_control() => ' ',
+            c => c,
         })
         .collect()
 }
@@ -693,8 +751,24 @@ fn split_mode(args: &[OsString]) -> Option<(Mode, &[OsString])> {
 fn parse_child_opts(args: &[OsString]) -> Result<ChildOpts, String> {
     let mut o = ChildOpts::default();
     let mut i = 0;
+    let mut positional_only = false;
     while i < args.len() {
         let a = args[i].to_string_lossy().into_owned();
+        // `--` ends option parsing: everything after it is a positional even
+        // when it starts with `-` (e.g. a password prompt titled "--help").
+        if !positional_only && a == "--" {
+            positional_only = true;
+            i += 1;
+            continue;
+        }
+        if positional_only || !a.starts_with('-') {
+            if o.positional.is_some() {
+                return Err(format!("unexpected argument {a:?}"));
+            }
+            o.positional = Some(a);
+            i += 1;
+            continue;
+        }
         let next = |i: &mut usize| -> Result<String, String> {
             *i += 1;
             args.get(*i)
@@ -933,15 +1007,88 @@ fn finish_menu(result: Result<MenuResult, ModalError>, format: OutputFormat) -> 
     }
 }
 
+/// One stdin option line may not exceed this many bytes.
+const MAX_OPTION_LINE: usize = 64 * 1024;
+/// Upper bound on accepted options; enough for any real menu.
+const MAX_OPTIONS: usize = 100_000;
+/// Upper bound on the complete stdin stream.
+const MAX_STDIN_BYTES: usize = 64 * 1024 * 1024;
+
 fn read_options_sync() -> io::Result<Vec<ModalOption>> {
     let mut options = Vec::new();
-    for line in io::stdin().lock().lines() {
-        let line = line?;
+    read_options_into(&mut io::stdin().lock(), &mut options)?;
+    Ok(options)
+}
+
+/// Read newline-delimited options with hard bounds.
+///
+/// A producer can otherwise hold the dialog open forever (FIFO with no
+/// writer, `/dev/zero`) or send one unbounded line. Overlong input is
+/// reported as an error; the rest of the line is drained so callers can
+/// decide whether to continue.
+fn read_options_into<R: io::BufRead>(
+    reader: &mut R,
+    options: &mut Vec<ModalOption>,
+) -> io::Result<()> {
+    let mut total = 0usize;
+    while let Some(line) = read_line_limited(reader)? {
+        total = total.saturating_add(line.len() + 1);
+        if total > MAX_STDIN_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("stdin exceeds {MAX_STDIN_BYTES} bytes"),
+            ));
+        }
         if let Some(opt) = parse_option_line(&line) {
+            if options.len() >= MAX_OPTIONS {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("more than {MAX_OPTIONS} options on stdin"),
+                ));
+            }
             options.push(opt);
         }
     }
-    Ok(options)
+    Ok(())
+}
+
+/// Read one line while never buffering more than `MAX_OPTION_LINE` bytes.
+/// Returns `Ok(None)` at EOF. The trailing newline is stripped.
+fn read_line_limited<R: io::BufRead>(reader: &mut R) -> io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    let n = reader
+        .by_ref()
+        .take(MAX_OPTION_LINE as u64 + 1)
+        .read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Ok(None);
+    }
+    let had_newline = buf.last() == Some(&b'\n');
+    if had_newline {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    if buf.len() > MAX_OPTION_LINE || (!had_newline && n == MAX_OPTION_LINE + 1) {
+        // Keep the stream usable: discard the remainder of this line.
+        if !had_newline {
+            loop {
+                let mut scratch = [0u8; 8192];
+                let n = reader.read(&mut scratch)?;
+                if n == 0 || scratch[..n].contains(&b'\n') {
+                    break;
+                }
+            }
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("option line exceeds {MAX_OPTION_LINE} bytes"),
+        ));
+    }
+    String::from_utf8(buf)
+        .map(Some)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "option is not valid UTF-8"))
 }
 
 /// Open the window immediately; deliver the whole list when stdin reaches EOF.
@@ -953,11 +1100,11 @@ fn read_options_stream() -> (Receiver<Vec<ModalOption>>, Arc<AtomicBool>, Arc<At
     let eof_thread = eof.clone();
     std::thread::spawn(move || {
         let mut options = Vec::new();
-        for line in io::stdin().lock().lines() {
-            let Ok(line) = line else { break };
-            if let Some(opt) = parse_option_line(&line) {
-                options.push(opt);
-            }
+        // On malformed/oversized input the channel is dropped without a
+        // final batch, which the modal treats as cancellation.
+        if read_options_into(&mut io::stdin().lock(), &mut options).is_err() {
+            eof_thread.store(true, Ordering::SeqCst);
+            return;
         }
         eof_thread.store(true, Ordering::SeqCst);
         if options.is_empty() {
@@ -978,26 +1125,34 @@ fn parse_option_line(line: &str) -> Option<ModalOption> {
     }
     match line.split_once('\t') {
         Some((id, label)) => {
-            let id = if id.is_empty() { label } else { id };
-            let label = if label.is_empty() { id } else { label };
-            if id.is_empty() {
+            let raw_id = if id.is_empty() { label } else { id };
+            let raw_label = if label.is_empty() { raw_id } else { label };
+            if raw_id.is_empty() {
                 None
             } else {
-                Some(ModalOption::new(id, label))
+                Some(ModalOption::new(
+                    sanitize(raw_id, true),
+                    sanitize(raw_label, false),
+                ))
             }
         }
-        None => Some(ModalOption::new(line, line)),
+        None => {
+            let text = sanitize(line, false);
+            Some(ModalOption::new(text.clone(), text))
+        }
     }
 }
 
 fn format_selection(sel: &ModalSelection, format: OutputFormat) -> String {
+    // Labels/ids come from stdin and may carry terminal escapes or line
+    // breaks; never print them raw. JSON stays exact (serde escapes it).
     match format {
-        OutputFormat::Label => format!("{}\n", sel.label),
-        OutputFormat::Id => format!("{}\n", sel.id),
+        OutputFormat::Label => format!("{}\n", sanitize(&sel.label, false)),
+        OutputFormat::Id => format!("{}\n", sanitize(&sel.id, true)),
         OutputFormat::Tag => format!(
             "{}\n{}\n",
-            sel.shortcut.as_deref().unwrap_or_default(),
-            sel.label
+            sanitize(sel.shortcut.as_deref().unwrap_or_default(), true),
+            sanitize(&sel.label, false)
         ),
         OutputFormat::Json => format!(
             "{}\n",
@@ -1146,12 +1301,7 @@ pub(crate) fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>
 
 /// Write the child pid atomically and remove it when the child exits.
 fn write_pid_file(path: &Path) -> io::Result<PidGuard> {
-    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, format!("{}\n", std::process::id()))?;
-    std::fs::rename(&tmp, path)?;
+    crate::fsutil::write_atomic(path, format!("{}\n", std::process::id()).as_bytes())?;
     Ok(PidGuard {
         path: path.to_path_buf(),
     })

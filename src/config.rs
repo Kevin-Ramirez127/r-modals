@@ -53,6 +53,12 @@ impl ConfigFile {
     /// This is applied when the file is first created and to built-in blocks
     /// appended on upgrade. Runtime tokens such as `{query}` are left for the
     /// picker; callers typically set `exe` to a shell-quoted executable path.
+    ///
+    /// Values are escaped for a TOML basic string (`"…"`), so a Windows path
+    /// such as `C:\Program Files\App.exe` or a path containing quotes cannot
+    /// break out of the string and inject extra config entries. Values are
+    /// inserted in a single pass: braces inside a value are not expanded
+    /// again.
     pub fn var(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
         self.vars.push((name.into(), value.into()));
         self
@@ -136,7 +142,7 @@ impl ConfigFile {
         }
 
         if changed {
-            write_atomic(&self.path, &content)?;
+            crate::fsutil::write_atomic(&self.path, content.as_bytes())?;
         }
         Ok(changed || seeded)
     }
@@ -168,20 +174,63 @@ impl ConfigFile {
             return Ok(false);
         }
 
-        write_atomic(&self.path, &content)?;
+        crate::fsutil::write_atomic(&self.path, content.as_bytes())?;
         for path in migrated {
             let _ = std::fs::remove_file(path);
         }
         Ok(true)
     }
 
+    /// One-pass `{name}` substitution with TOML string escaping.
+    ///
+    /// A single pass (rather than `str::replace` per variable) means a value
+    /// containing `{other}` is inserted literally instead of being expanded
+    /// by a later variable. Unknown tokens, notably the runtime `{query}`,
+    /// are preserved for the picker.
     fn substitute(&self, text: &str) -> String {
-        let mut out = text.to_string();
-        for (name, value) in &self.vars {
-            out = out.replace(&format!("{{{name}}}"), value);
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some(start) = rest.find('{') {
+            out.push_str(&rest[..start]);
+            let after = &rest[start + 1..];
+            let Some(end) = after.find('}') else {
+                // Unbalanced brace: keep the remainder verbatim.
+                out.push_str(&rest[start..]);
+                return out;
+            };
+            let name = &after[..end];
+            match self.vars.iter().find(|(n, _)| n == name) {
+                Some((_, value)) => out.push_str(&toml_escape(value)),
+                None => {
+                    out.push('{');
+                    out.push_str(name);
+                    out.push('}');
+                }
+            }
+            rest = &after[end + 1..];
         }
+        out.push_str(rest);
         out
     }
+}
+
+/// Escape a value for a TOML basic string. Prevents a variable (typically an
+/// executable path) from terminating the surrounding `"…"` and injecting
+/// additional tables or keys into the generated config.
+fn toml_escape(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for c in value.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// Append a `[[section]]` block after a blank line, preserving the tail style.
@@ -236,29 +285,6 @@ fn embedded_blocks(
     }
     flush(&mut body, &mut out, &name_of);
     out
-}
-
-fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let tmp = path.with_extension(format!("tmp.{}", std::process::id()));
-    std::fs::write(&tmp, content)?;
-    match std::fs::rename(&tmp, path) {
-        Ok(()) => Ok(()),
-        Err(e) => {
-            // Windows cannot replace an existing file with rename(2). Retry
-            // once after removing it; the data is already safely in `tmp`.
-            if path.exists() {
-                let _ = std::fs::remove_file(path);
-                if std::fs::rename(&tmp, path).is_ok() {
-                    return Ok(());
-                }
-            }
-            let _ = std::fs::remove_file(&tmp);
-            Err(e)
-        }
-    }
 }
 
 #[cfg(test)]

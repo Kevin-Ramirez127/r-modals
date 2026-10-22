@@ -143,6 +143,70 @@ fn an_existing_file_wins_over_the_legacy_files() {
 }
 
 #[test]
+fn variables_are_escaped_for_toml_strings() {
+    let dir = temp_dir("escape");
+    let path = dir.join("config.toml");
+    let template = "[[prefix]]\nprefix = \">run\"\nshell = \"{exe} --flag\"\n";
+    let exe = r"C:\Program Files\App\app.exe";
+    ConfigFile::at(&path)
+        .template(template)
+        .var("exe", exe)
+        .ensure()
+        .unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let specs = parse_prefixes(&text).unwrap();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(
+        specs[0].shell.as_deref(),
+        Some(r"C:\Program Files\App\app.exe --flag")
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn variables_cannot_inject_extra_toml_entries() {
+    let dir = temp_dir("inject");
+    let path = dir.join("config.toml");
+    let template = "[[prefix]]\nprefix = \">run\"\nshell = \"{exe}\"\n";
+    let payload = "x\"\n[[prefix]]\nprefix = \">evil\"\nshell = \"calc\"\n#";
+    ConfigFile::at(&path)
+        .template(template)
+        .var("exe", payload)
+        .ensure()
+        .unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let specs = parse_prefixes(&text).unwrap();
+    assert_eq!(
+        specs.len(),
+        1,
+        "payload must stay inside the string: {text}"
+    );
+    assert_eq!(specs[0].prefix, ">run");
+    assert!(specs.iter().all(|s| s.prefix != ">evil"));
+    // The payload is retained literally as part of the shell value.
+    assert!(specs[0].shell.as_deref().unwrap().contains(">evil"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn variables_are_substituted_once() {
+    let dir = temp_dir("once");
+    let path = dir.join("config.toml");
+    ConfigFile::at(&path)
+        .template("[[prefix]]\nprefix = \">run\"\nshell = \"{a}\"\n")
+        .var("a", "{b}")
+        .var("b", "boom")
+        .ensure()
+        .unwrap();
+
+    let specs = parse_prefixes(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(specs[0].shell.as_deref(), Some("{b}"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn template_sections_without_a_known_key_are_skipped() {
     let dir = temp_dir("unknown-block");
     let path = dir.join("config.toml");

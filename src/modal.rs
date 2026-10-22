@@ -7,6 +7,13 @@ use crate::{
 };
 use std::sync::{Arc, Mutex};
 
+/// History files are written by this crate, so anything larger is either
+/// corrupt or hostile. Keep both the byte size and entry count bounded.
+const HISTORY_MAX_BYTES: usize = 1 << 20;
+const HISTORY_MAX_ENTRIES: usize = 4096;
+/// Ids longer than this are truncated before being persisted.
+const HISTORY_MAX_ID_CHARS: usize = 512;
+
 /// What the user picked. `None` (from [`Modal::run`]) means Esc / window closed.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ModalSelection {
@@ -487,7 +494,19 @@ impl Modal {
         if specs.is_empty() && self.shortcut_sources.is_empty() && self.auto_shortcuts {
             if let Some(path) = shortcut::default_shortcuts_path() {
                 if path.is_file() {
-                    specs = shortcut::load_shortcuts_file(&path).map_err(ModalError::Shortcuts)?;
+                    // Auto-discovered configs can run commands: refuse
+                    // group/world-writable files so another local user
+                    // cannot inject a shortcut. Explicit paths are trusted
+                    // as the caller's own choice.
+                    if crate::fsutil::trusted_config_file(&path) {
+                        specs =
+                            shortcut::load_shortcuts_file(&path).map_err(ModalError::Shortcuts)?;
+                    } else {
+                        eprintln!(
+                            "r-modals: ignoring insecure shortcuts file {} (make it non-group/world-writable)",
+                            path.display()
+                        );
+                    }
                 }
             }
         }
@@ -549,8 +568,16 @@ impl Modal {
         if !explicit && self.auto_prefixes {
             if let Some(path) = prefix::default_prefixes_path() {
                 if path.is_file() {
-                    let specs = prefix::load_prefixes_file(&path).map_err(ModalError::Prefixes)?;
-                    compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                    if crate::fsutil::trusted_config_file(&path) {
+                        let specs =
+                            prefix::load_prefixes_file(&path).map_err(ModalError::Prefixes)?;
+                        compiled.extend(prefix::compile_all(&specs).map_err(ModalError::Prefixes)?);
+                    } else {
+                        eprintln!(
+                            "r-modals: ignoring insecure prefixes file {} (make it non-group/world-writable)",
+                            path.display()
+                        );
+                    }
                 }
             }
         }
@@ -578,12 +605,18 @@ impl Modal {
     }
 
     /// Load `id -> count` history. Best-effort: errors yield an empty map.
+    ///
+    /// Only regular files are read (a symlink or FIFO is ignored), and the
+    /// read is capped so a hostile/huge file cannot exhaust memory or block
+    /// forever.
     pub(crate) fn load_history(path: &str) -> std::collections::HashMap<String, u64> {
         let mut map = std::collections::HashMap::new();
-        let Ok(text) = std::fs::read_to_string(path) else {
+        let Ok(text) =
+            crate::fsutil::read_regular_limited(std::path::Path::new(path), HISTORY_MAX_BYTES)
+        else {
             return map;
         };
-        for line in text.lines() {
+        for line in text.lines().take(HISTORY_MAX_ENTRIES) {
             let mut parts = line.rsplitn(2, ' ');
             let (count, id) = match (parts.next(), parts.next()) {
                 (Some(c), Some(id)) => (c, id),
@@ -616,16 +649,29 @@ impl Modal {
         let Some(path) = &self.history_file else {
             return;
         };
+        // Newlines would forge extra history rows; cap the length and entry
+        // count so a hostile caller cannot grow the file without bound.
+        let id: String = id
+            .chars()
+            .map(|c| if c == '\n' || c == '\r' { ' ' } else { c })
+            .take(HISTORY_MAX_ID_CHARS)
+            .collect();
+        if id.is_empty() {
+            return;
+        }
         let mut counts = Self::load_history(path);
-        *counts.entry(id.to_string()).or_insert(0) += 1;
+        let count = counts.entry(id).or_insert(0);
+        *count = count.saturating_add(1);
         let mut rows: Vec<(&String, &u64)> = counts.iter().collect();
         rows.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+        rows.truncate(HISTORY_MAX_ENTRIES);
         let text = rows
             .iter()
             .map(|(id, n)| format!("{id} {n}"))
             .collect::<Vec<_>>()
             .join("\n");
-        let _ = std::fs::write(path, text);
+        // Atomic 0600 replacement; never follows a symlinked history path.
+        let _ = crate::fsutil::write_atomic(std::path::Path::new(path), text.as_bytes());
     }
 
     /// Collect `(index-path, action, on_error)` for every option with an

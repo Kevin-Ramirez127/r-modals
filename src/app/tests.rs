@@ -43,6 +43,27 @@ fn load_icon_variants() {
         rgba: vec![255; 3],
     })
     .is_none());
+    // Dimensions whose byte count overflows `usize` are rejected instead of
+    // wrapping into a small allocation check.
+    assert!(load_icon(&IconSource::Pixels {
+        width: usize::MAX,
+        height: 2,
+        rgba: Vec::new(),
+    })
+    .is_none());
+    // Zero and oversized dimensions are rejected before touching the GPU.
+    assert!(load_icon(&IconSource::Pixels {
+        width: 0,
+        height: 0,
+        rgba: Vec::new(),
+    })
+    .is_none());
+    assert!(load_icon(&IconSource::Pixels {
+        width: MAX_ICON_EDGE + 1,
+        height: 1,
+        rgba: vec![255; (MAX_ICON_EDGE + 1) * 4],
+    })
+    .is_none());
     assert!(load_icon(&IconSource::None).is_none());
 }
 
