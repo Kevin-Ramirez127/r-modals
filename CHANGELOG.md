@@ -2,7 +2,40 @@
 
 ## 0.2.0 — unreleased
 
+### Spawnable dialog backend
+- `Dialog::menu()/ask()/confirm()/error()` + `DialogSession` spawn the current
+  executable (or `.program(path)`), stream `id<TAB>label` options into a menu,
+  and return a typed `DialogOutput` (`Picked`, `PickedMany`, `Text`,
+  `Confirmed`, `Shown`, `Cancelled`, `Raw`)
+- `dialog_main!()` dispatches `--menu`/`--dmenu`/`--stdin`, `--ask`,
+  `--confirm`, and `--error` at the top of a consumer's `main`
+- The same modes are available from the `r-modals` binary: stdin options,
+  `--format label|id|tag|json`, `--print-id`, `--no-stream`,
+  `--loading-message`, `--pid-file`, and the existing picker flags
+- `DialogSession` writes/removes the pid file, maps exit `0`/`1`/`2` to
+  pick/cancel/error, and parses JSON back into `ModalSelection`
+- `ModalSelection` now derives `Serialize`/`Deserialize`
+
+### Unified config lifecycle
+- `ConfigFile::at(path).template(..).var(..).migrate_from(..).ensure()` creates a
+  single `config.toml`, folds in the legacy split files once, and appends
+  built-in entries added by a newer version without duplicating existing names
+- Malformed existing files are deliberately left untouched; writes are atomic
+- `{exe}` in prefix/shortcut actions resolves at spec compile time to the
+  running consumer executable: raw in `command`/`args`, shell-quoted in `shell`
+
+### Dialog titles and window runner
+- `Confirm` and `Prompt` now render their title inside the borderless window;
+  `.show_title(false)` hides it, and both gain `.stylesheet(..)`/`.position(..)`
+- New shared `window::run_app`/`WindowSpec` backs the picker, confirm, and
+  prompt, so viewport options stay consistent
+- `Prompt` input uses the themed search field styling
+
 ### Picker UX
+- `Tab` completes a partial registered prefix first; when there is no prefix
+  completion, it completes the search field with the focused row's label
+- `Left`/`Right`/`Home`/`End` move the query caret while the search field has
+  text; with an empty query they still navigate rows and submenus
 - `Modal::min_match_chars(n)` hides the full list until the query reaches `n`
   characters; shorter queries show only exact label/id matches (empty query:
   nothing), so sensitive lists stay out of view
@@ -14,8 +47,6 @@
 - `Modal::default_selected`, `Modal::allow_custom_input` (command-palette free text),
   `Modal::empty_message`, `Modal::footer_hint`, `Modal::max_results`
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
-- `Left`/`Right` move the caret once the focused search field has text,
-  instead of always moving through the list/grid
 - First-query-occurrence highlight (underline, no layout shift)
 
 ### Streaming options
@@ -30,12 +61,15 @@
 - Shortcut keys are consumed before the built-in keys (can rebind `Enter`); the
   most specific combo wins (`Ctrl+Shift+S` before `Ctrl+S`)
 - Bound `option` shortcuts auto-fill the row's right-aligned hint
+- `pick = "<tag>"` binds a key to picking the highlighted row while tagging the
+  selection (`ModalSelection::shortcut`), so the same pick can mean something
+  else (e.g. `Shift+Enter` copies the username instead of the password)
 - Auto-loads `$XDG_CONFIG_HOME/r-modals/shortcuts.toml` (or
   `~/.config/r-modals/shortcuts.toml`) when present; disable with
   `Modal::auto_shortcuts(false)`
 - `ShortcutSpec`, `parse_shortcuts`, `load_shortcuts_file`, `default_shortcuts_path`;
   `ModalError::Shortcuts` for parse/validation failures; reference in `examples/assets/shortcuts.toml`
-- CLI: `r-modals --dmenu --shortcuts FILE` / `--no-shortcuts`
+- CLI: `r-modals --menu --shortcuts FILE` / `--no-shortcuts`
 
 ### New modal types
 - `Confirm::new(...).message(...).run() -> bool`
@@ -50,7 +84,9 @@
   including a Rust closure that reads the remainder from `selection.query`
 - Typing a registered prefix and pressing `Enter` runs its action with the
   text after the prefix (the remainder) and closes the modal without a pick —
-  the same contract as a standalone shortcut action
+  the same contract as a standalone shortcut action. An `=` right after the
+  prefix (spaces allowed) delimits an explicit parameter, so
+  `>search=Hello World` passes `Hello World` without the `=`
 - Typing a partial prefix shows the closest registered prefix as a hint
   (`starts_with`, shortest completion wins); `Tab` completes the search field
   to it and leaves the cursor at the end
@@ -65,7 +101,7 @@
   `ModalError::Prefixes` for parse/validation failures; reference in
   `examples/assets/prefixes.toml`
 
-### CLI (`r-modals --dmenu`)
+### CLI (`r-modals --menu`)
 - stdin-lines → picker → stdout, `--prompt/--layout/--theme/--multi/--fuzzy/`
   `--case-sensitive/--allow-custom/--history-file/--empty-message/`
   `--max-results/--print-id`; exit codes 0 pick · 1 cancel · 2 error

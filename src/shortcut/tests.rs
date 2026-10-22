@@ -122,6 +122,32 @@ fn compile_builds_each_target_kind() {
 }
 
 #[test]
+fn compile_expands_exe_in_actions() {
+    let exe = std::env::current_exe()
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+
+    let cmd = compile(&ShortcutSpec::command("Ctrl+T", "{exe}").args(["--flag", "{exe}"])).unwrap();
+    match cmd.target {
+        ShortcutTarget::Action(SelectAction::Command { program, args }) => {
+            assert_eq!(program, exe);
+            assert_eq!(args, vec!["--flag".to_string(), exe.clone()]);
+        }
+        other => panic!("expected command, got {other:?}"),
+    }
+
+    let sh = compile(&ShortcutSpec::shell("Ctrl+N", "{exe} sync")).unwrap();
+    match sh.target {
+        ShortcutTarget::Action(SelectAction::Shell(cmd)) => {
+            assert!(cmd.contains(&crate::prefix::shell_quote(&exe)));
+            assert!(!cmd.contains("{exe}"));
+        }
+        other => panic!("expected shell, got {other:?}"),
+    }
+}
+
+#[test]
 fn compile_rejects_ambiguous_or_incomplete_specs() {
     let none = ShortcutSpec {
         key: "Ctrl+O".to_string(),
@@ -136,6 +162,22 @@ fn compile_rejects_ambiguous_or_incomplete_specs() {
     let mut stray_args = ShortcutSpec::option("Ctrl+O", "ff");
     stray_args.args.push("--nope".to_string());
     assert!(compile(&stray_args).is_err());
+
+    // `pick` competes with the other targets for "exactly one".
+    let mut both = ShortcutSpec::pick("Shift+Enter", "username");
+    both.shell = Some("echo hi".to_string());
+    assert!(compile(&both).is_err());
+}
+
+#[test]
+fn compile_pick_targets_the_highlighted_row() {
+    let compiled = compile(&ShortcutSpec::pick("Shift+Enter", "username")).unwrap();
+    assert_eq!(compiled.key, egui::Key::Enter);
+    assert!(compiled.modifiers.shift);
+    match compiled.target {
+        ShortcutTarget::Pick(tag) => assert_eq!(tag, "username"),
+        other => panic!("expected a pick target, got {other:?}"),
+    }
 }
 
 #[test]

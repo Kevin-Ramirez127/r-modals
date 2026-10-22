@@ -44,6 +44,7 @@ fn dispatch_action_falls_back_on_spawn_failure() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     // No panic without a handler either.
     let bare = Modal::new("y")
@@ -89,6 +90,7 @@ fn dispatch_action_skips_fallback_on_success() {
         path: vec![0],
         query: String::new(),
         custom_input: false,
+        shortcut: None,
     };
     Modal::dispatch_action(&m.collect_actions(), &sel);
     assert!(!*fired.lock().unwrap());
@@ -182,6 +184,25 @@ fn resolve_shortcuts_fills_hints_and_drops_unknown_ids() {
     // The ghost-id shortcut is dropped: only the two real ones remain.
     assert_eq!(m.compiled_shortcuts.len(), 2);
     assert_eq!(m.compiled_shortcuts[0].hint, "Ctrl+Alt+T");
+}
+
+#[test]
+fn streaming_keeps_option_shortcuts_until_options_arrive() {
+    let mut m = Modal::new("x").shortcuts_toml(
+        r#"
+        [[shortcut]]
+        key = "Ctrl+O"
+        option = "ff"
+        "#,
+    );
+    // No options yet: the shortcut must survive so it still works after the
+    // first streamed batch arrives.
+    m.resolve_shortcuts_with(true).unwrap();
+    assert_eq!(m.compiled_shortcuts.len(), 1);
+    assert!(matches!(
+        m.compiled_shortcuts[0].target,
+        crate::shortcut::ShortcutTarget::Option(ref id) if id == "ff"
+    ));
 }
 
 #[test]
@@ -320,6 +341,7 @@ fn prefix_action_accepts_callbacks_and_rejects_empty_prefix() {
         path: Vec::new(),
         query: "ls -la".to_string(),
         custom_input: true,
+        shortcut: None,
     };
     m.compiled_prefixes[0].execute(&sel, "ls -la").unwrap();
     assert_eq!(*seen.lock().unwrap(), vec!["ls -la".to_string()]);

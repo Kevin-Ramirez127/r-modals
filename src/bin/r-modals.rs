@@ -1,46 +1,75 @@
-use r_modals::{Layout, Modal, ModalOption, Theme};
-use std::io::{self, IsTerminal, Read};
+use r_modals::{Layout, Modal, ModalOption};
+use std::ffi::OsString;
+use std::io::{self, IsTerminal};
 use std::path::PathBuf;
 
 fn print_help() {
     println!(
-        "r-modals — instant option picker\n\
+        "r-modals — instant option picker and native dialogs\n\
          \n\
-         MODES\n\
+         MODES (the mode must come first)\n\
          \x20  Image demo (default):  r-modals [DIR]\n\
-         \x20  dmenu mode:            <stdin> | r-modals --dmenu [OPTIONS]\n\
-         \x20                         (stdin piped in also implies dmenu mode)\n\
+         \x20  Menu:                  <stdin> | r-modals --menu [OPTIONS]\n\
+         \x20  Ask:                   r-modals --ask LABEL [OPTIONS]\n\
+         \x20  Confirm:               r-modals --confirm TITLE [OPTIONS]\n\
+         \x20  Error:                 r-modals --error MESSAGE [OPTIONS]\n\
+         \x20  --dmenu and --stdin are aliases of --menu.\n\
          \n\
-         DMENU OPTIONS\n\
-         \x20  --prompt TITLE         window title (default: \"Pick one\")\n\
-         \x20  --placeholder TEXT     search placeholder\n\
-         \x20  --layout list|grid     default: list\n\
-         \x20  --theme NAME|PATH|CSS  dark|light|transparent|auto (default: dark),\n\
-         \x20                         or a .css file path, or inline CSS\n\
-         \x20  --multi                Space-toggle multi-select, print one pick per line\n\
-         \x20  --fuzzy                subsequence fuzzy match, best-first\n\
-         \x20  --case-sensitive       case-sensitive matching\n\
-         \x20  --allow-custom         Enter with no match returns the typed text\n\
-         \x20  --history-file PATH    persist counts, sort most-used-first\n\
-         \x20  --empty-message TEXT   shown when nothing matches\n\
-         \x20  --max-results N        cap visible rows (best matches first)\n\
-         \x20  --print-id             print option id instead of label\n\
-         \x20  --shortcuts FILE       key bindings from a TOML file (bind a key to\n\
-         \x20                         an option id, or run a command/shell)\n\
-         \x20  --no-shortcuts         don't auto-load ~/.config/r-modals/shortcuts.toml\n\
-         \x20  --prefixes FILE        query prefixes from a TOML file (type the\n\
-         \x20                         prefix, Enter runs its command/shell)\n\
-         \x20  --no-prefixes          don't auto-load ~/.config/r-modals/prefixes.toml\n\
-         \x20  -h, --help             this help\n\
+         COMMON OPTIONS\n\
+         \x20  --app-id ID             Wayland app_id / X11 class hint\n\
+         \x20  --pid-file PATH         write the window pid for hide/toggle\n\
+         \x20  --theme NAME|PATH|CSS   dark|light|transparent|auto,\n\
+         \x20                          or a .css file path, or inline CSS\n\
+         \x20  --config FILE           unified config.toml (prefixes + shortcuts)\n\
+         \x20  --no-title              don't render the title inside the window\n\
+         \n\
+         MENU OPTIONS\n\
+         \x20  --prompt TITLE          window title (default: \"Pick one\")\n\
+         \x20  --placeholder TEXT      search placeholder\n\
+         \x20  --layout list|grid      default: list\n\
+         \x20  --multi                 Space-toggle multi-select, print one pick per line\n\
+         \x20  --fuzzy                 subsequence fuzzy match, best-first\n\
+         \x20  --case-sensitive        case-sensitive matching\n\
+         \x20  --allow-custom          Enter with no match returns the typed text\n\
+         \x20  --history-file PATH     persist counts, sort most-used-first\n\
+         \x20  --empty-message TEXT    shown when nothing matches\n\
+         \x20  --max-results N         cap visible rows (best matches first)\n\
+         \x20  --min-match-chars N     hide the full list until N chars are typed\n\
+         \x20  --loading-message TEXT  shown while stdin is still open\n\
+         \x20  --footer-hint TEXT      hint line at the bottom\n\
+         \x20  --no-stream             read all stdin before opening the window\n\
+         \x20  --format label|id|tag|json\n\
+         \x20                          output shape (default: label); tag prints\n\
+         \x20                          the shortcut tag then the label\n\
+         \x20  --print-id              alias of --format id\n\
+         \x20  --shortcuts FILE        key bindings from a TOML file\n\
+         \x20  --no-shortcuts          don't auto-load the default shortcuts file\n\
+         \x20  --prefixes FILE         query prefixes from a TOML file\n\
+         \x20  --no-prefixes           don't auto-load the default prefixes file\n\
+         \n\
+         ASK OPTIONS\n\
+         \x20  --password              mask the input\n\
+         \x20  --initial TEXT          pre-filled value\n\
+         \x20  --placeholder TEXT      hint text\n\
+         \x20  --message TEXT          body text under the title\n\
+         \x20  --confirm-label TEXT    button text (default: OK)\n\
+         \n\
+         CONFIRM / ERROR OPTIONS\n\
+         \x20  --message TEXT          body text under the title\n\
+         \x20  --confirm-label TEXT    confirm button text\n\
+         \x20  --cancel-label TEXT     cancel button text\n\
+         \x20  --title TEXT            window title for --error (default: r-modals)\n\
          \n\
          EXIT CODES\n\
-         \x20  0 pick printed · 1 cancelled (no output) · 2 error\n\
+         \x20  0 pick/value/confirmed/shown · 1 cancelled · 2 error\n\
          \n\
          EXAMPLES\n\
-         \x20  ls ~/bin | r-modals --dmenu --prompt Run\n\
-         \x20  printf 'a\\nb\\nc' | r-modals --dmenu --fuzzy --multi\n\
-         \x20  ls ~/bin | r-modals --dmenu --shortcuts ~/.config/r-modals/shortcuts.toml\n\
-         \x20  ls ~/bin | r-modals --dmenu --prefixes ~/.config/r-modals/prefixes.toml\n\
+         \x20  ls ~/bin | r-modals --menu --prompt Run\n\
+         \x20  printf 'a\\nb\\nc' | r-modals --menu --fuzzy --multi\n\
+         \x20  printf 'ff\\tFirefox\\nterm\\tTerminal\\n' | r-modals --menu --format json\n\
+         \x20  r-modals --ask \"Master password\" --password\n\
+         \x20  r-modals --confirm \"Delete?\" --message \"This cannot be undone.\"\n\
+         \x20  r-modals --error \"Something went wrong\"\n\
          \x20  r-modals ~/Pictures/wallpapers"
     );
 }
@@ -91,149 +120,6 @@ const GLYPH_TERM: [&str; 4] = ["+------+", "| >_   |", "|      |", "+------+"];
 const GLYPH_R: [&str; 5] = ["## ", "# #", "## ", "# #", "# #"];
 const GLYPH_G: [&str; 5] = ["###", "#  ", "# #", "# #", "###"];
 const GLYPH_B: [&str; 5] = ["## ", "# #", "## ", "# #", "## "];
-
-#[derive(Default)]
-struct DmenuOpts {
-    prompt: Option<String>,
-    placeholder: Option<String>,
-    layout: Option<String>,
-    theme: Option<String>,
-    multi: bool,
-    fuzzy: bool,
-    case_sensitive: bool,
-    allow_custom: bool,
-    history_file: Option<String>,
-    empty_message: Option<String>,
-    max_results: Option<usize>,
-    print_id: bool,
-    shortcuts: Option<String>,
-    no_shortcuts: bool,
-    prefixes: Option<String>,
-    no_prefixes: bool,
-}
-
-fn resolve_theme(spec: Option<&str>) -> Result<(Theme, Option<String>), String> {
-    let Some(spec) = spec else {
-        return Ok((Theme::dark(), None));
-    };
-    match spec {
-        "dark" => Ok((Theme::dark(), None)),
-        "light" => Ok((Theme::light(), None)),
-        "transparent" | "transparent_dark" | "transparent-dark" => {
-            Ok((Theme::transparent_dark(), None))
-        }
-        "auto" => Ok((Theme::auto(), None)),
-        other => {
-            // A real file path wins; otherwise treat it as inline CSS.
-            if std::path::Path::new(other).is_file() {
-                let css = std::fs::read_to_string(other)
-                    .map_err(|e| format!("cannot read theme file {other:?}: {e}"))?;
-                return Ok((Theme::dark(), Some(css)));
-            }
-            Ok((Theme::dark(), Some(other.to_string())))
-        }
-    }
-}
-
-fn run_dmenu(opts: DmenuOpts) -> i32 {
-    let mut input = String::new();
-    if io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("r-modals: cannot read stdin");
-        return 2;
-    }
-    let lines: Vec<String> = input
-        .lines()
-        .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
-    if lines.is_empty() {
-        eprintln!("r-modals: no options on stdin");
-        return 2;
-    }
-    let (theme, stylesheet) = match resolve_theme(opts.theme.as_deref()) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("r-modals: {e}");
-            return 2;
-        }
-    };
-    let layout = match opts.layout.as_deref() {
-        Some("grid") => Layout::Grid,
-        _ => Layout::List,
-    };
-    let mut modal = Modal::new(opts.prompt.unwrap_or_else(|| "Pick one".to_string()))
-        .theme(theme)
-        .layout(layout)
-        .fuzzy(opts.fuzzy)
-        .case_sensitive(opts.case_sensitive)
-        .allow_custom_input(opts.allow_custom)
-        .footer_hint("Enter pick · Esc cancel");
-    if let Some(p) = opts.placeholder {
-        modal = modal.placeholder(p);
-    }
-    if let Some(css) = stylesheet {
-        modal = modal.stylesheet(css);
-    }
-    if let Some(h) = opts.history_file {
-        modal = modal.history_file(h);
-    }
-    if let Some(m) = opts.empty_message {
-        modal = modal.empty_message(m);
-    }
-    if let Some(m) = opts.max_results {
-        modal = modal.max_results(m);
-    }
-    // Explicit --shortcuts FILE wins; --no-shortcuts disables the default file.
-    if let Some(path) = opts.shortcuts {
-        modal = modal.shortcuts_file(path);
-    } else if opts.no_shortcuts {
-        modal = modal.auto_shortcuts(false);
-    }
-    // Same contract for query prefixes.
-    if let Some(path) = opts.prefixes {
-        modal = modal.prefixes_file(path);
-    } else if opts.no_prefixes {
-        modal = modal.auto_prefixes(false);
-    }
-    for line in &lines {
-        modal = modal.option(ModalOption::new(line.clone(), line.clone()));
-    }
-    if opts.multi {
-        match modal.run_multi() {
-            Ok(picks) if picks.is_empty() => 1,
-            Ok(picks) => {
-                for s in &picks {
-                    if opts.print_id {
-                        println!("{}", s.id);
-                    } else {
-                        println!("{}", s.label);
-                    }
-                }
-                0
-            }
-            Err(e) => {
-                eprintln!("r-modals: {e}");
-                2
-            }
-        }
-    } else {
-        match modal.run() {
-            Ok(Some(sel)) => {
-                if opts.print_id {
-                    println!("{}", sel.id);
-                } else {
-                    println!("{}", sel.label);
-                }
-                0
-            }
-            Ok(None) => 1,
-            Err(e) => {
-                eprintln!("r-modals: {e}");
-                2
-            }
-        }
-    }
-}
 
 fn run_image_demo(dir: &str) -> Result<(), String> {
     let mut modal = Modal::new("Pick an image")
@@ -292,6 +178,22 @@ fn run_image_demo(dir: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Put a dialog mode first so the historical `--prompt X --dmenu` order keeps
+/// working even though the child parser expects the mode as argv[1].
+fn reorder_mode(args: &[OsString]) -> Option<Vec<OsString>> {
+    let index = args.iter().position(|a| {
+        matches!(
+            a.to_string_lossy().as_ref(),
+            "--menu" | "--dmenu" | "--stdin" | "--ask" | "--confirm" | "--error"
+        )
+    })?;
+    let mut out = Vec::with_capacity(args.len());
+    out.push(args[index].clone());
+    out.extend(args[..index].iter().cloned());
+    out.extend(args[index + 1..].iter().cloned());
+    Some(out)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
@@ -302,56 +204,30 @@ fn main() {
         println!("r-modals {}", env!("CARGO_PKG_VERSION"));
         return;
     }
-    let stdin_piped = !io::stdin().is_terminal();
-    let mut dmenu = stdin_piped;
-    let mut opts = DmenuOpts::default();
-    let mut dir: Option<String> = None;
-    let mut i = 0;
-    let mut bad: Option<String> = None;
-    while i < args.len() {
-        let a = args[i].as_str();
-        let next = |i: &mut usize| -> Option<String> {
-            *i += 1;
-            args.get(*i).cloned()
-        };
-        match a {
-            "--dmenu" | "--stdin" => dmenu = true,
-            "--prompt" => opts.prompt = next(&mut i),
-            "--placeholder" => opts.placeholder = next(&mut i),
-            "--layout" => opts.layout = next(&mut i),
-            "--theme" => opts.theme = next(&mut i),
-            "--multi" => opts.multi = true,
-            "--fuzzy" => opts.fuzzy = true,
-            "--case-sensitive" => opts.case_sensitive = true,
-            "--allow-custom" => opts.allow_custom = true,
-            "--history-file" => opts.history_file = next(&mut i),
-            "--empty-message" => opts.empty_message = next(&mut i),
-            "--max-results" => match next(&mut i).as_deref().map(str::parse::<usize>) {
-                Some(Ok(n)) => opts.max_results = Some(n),
-                _ => bad = Some("--max-results needs a number".to_string()),
-            },
-            "--print-id" => opts.print_id = true,
-            "--shortcuts" => opts.shortcuts = next(&mut i),
-            "--no-shortcuts" => opts.no_shortcuts = true,
-            "--prefixes" => opts.prefixes = next(&mut i),
-            "--no-prefixes" => opts.no_prefixes = true,
-            s if s.starts_with('-') => bad = Some(format!("unknown flag {s} (see --help)")),
-            s => {
-                if dir.is_none() && !dmenu {
-                    dir = Some(s.to_string());
-                }
-            }
+
+    let raw: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let dialog_args = if let Some(ordered) = reorder_mode(&raw) {
+        Some(ordered)
+    } else if !io::stdin().is_terminal() {
+        // Piped stdin keeps the historical implicit dmenu mode.
+        let mut menu = Vec::with_capacity(raw.len() + 1);
+        menu.push(OsString::from("--menu"));
+        menu.extend(raw);
+        Some(menu)
+    } else {
+        None
+    };
+    if let Some(dialog_args) = dialog_args {
+        if let Some(code) = r_modals::run_child_args(&dialog_args) {
+            std::process::exit(code);
         }
-        i += 1;
     }
-    if let Some(e) = bad {
-        eprintln!("r-modals: {e}");
-        std::process::exit(2);
-    }
-    if dmenu {
-        std::process::exit(run_dmenu(opts));
-    }
-    let dir = dir.unwrap_or_else(|| "assets".to_string());
+
+    let dir = args
+        .first()
+        .filter(|a| !a.starts_with('-'))
+        .cloned()
+        .unwrap_or_else(|| "assets".to_string());
     if let Err(e) = run_image_demo(&dir) {
         eprintln!("r-modals: {e}");
         std::process::exit(2);

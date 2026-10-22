@@ -28,6 +28,10 @@
 //! - [`PrefixSpec`] — query prefixes that run an action on confirm
 //!   ([`Modal::prefixes_file`]).
 //! - [`Confirm`] / [`Prompt`] — one-shot dialogs built on the same backend.
+//! - [`Dialog`] / [`DialogSession`] / [`DialogOutput`] — spawn the consumer's
+//!   own binary in `--menu`/`--ask`/`--confirm`/`--error` mode; call
+//!   [`dialog_main!`] first in `main`.
+//! - [`ConfigFile`] — unified prefix/shortcut config with legacy migration.
 //! - [`ModalError`] — typed errors from [`Modal::run`].
 //!
 //! Styling is done with CSS stylesheets: [`Modal::stylesheet`] or
@@ -39,8 +43,10 @@
 //! compositor-specific layer-shell protocols.
 
 mod app;
+mod config;
 mod confirm;
 mod css;
+mod dialog;
 mod error;
 mod modal;
 mod multi;
@@ -50,8 +56,11 @@ mod prompt;
 mod search;
 mod shortcut;
 mod theme;
+mod window;
 
+pub use config::ConfigFile;
 pub use confirm::Confirm;
+pub use dialog::{run_child_args, run_child_from_args, Dialog, DialogOutput, DialogSession};
 pub use error::ModalError;
 pub use modal::{Modal, ModalSelection};
 pub use multi::{run_multi, MultiSelection};

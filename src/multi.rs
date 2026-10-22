@@ -147,6 +147,7 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
                                     path: vec![idx],
                                     query: self.query.clone(),
                                     custom_input: false,
+                                    shortcut: None,
                                 }
                             })
                             .collect();

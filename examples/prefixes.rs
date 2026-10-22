@@ -7,10 +7,12 @@
 //! the text after the prefix (the "remainder") and the modal closes without a
 //! pick — the same shape as a standalone shortcut action.
 //!
-//! The `{query}` token is replaced by the remainder. When an action sets no
-//! `{query}`, the remainder is appended (an extra argument for `command`, a
-//! single shell-quoted word for `shell`). For `shell`, `{query}` is inserted
-//! shell-quoted, so don't wrap it in quotes yourself.
+//! The `{query}` token is replaced by the remainder. An `=` right after the
+//! prefix (spaces allowed) delimits an explicit parameter, so
+//! `>search=Hello World` passes `Hello World` (without the `=`). When an
+//! action sets no `{query}`, the remainder is appended (an extra argument for
+//! `command`, a single shell-quoted word for `shell`). For `shell`, `{query}`
+//! is inserted shell-quoted, so don't wrap it in quotes yourself.
 //!
 //! Prefixes load from a TOML file (`Modal::prefixes_file`, auto-loaded from
 //! `~/.config/r-modals/prefixes.toml` when present), inline TOML

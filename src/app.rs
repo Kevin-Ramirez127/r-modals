@@ -442,6 +442,19 @@ impl ModalApp {
         self.filter_visible.clone()
     }
 
+    /// Label of the row under the cursor, for Tab completion. Empty queries
+    /// and an already-complete label produce no completion, so Tab keeps its
+    /// prefix-completion meaning and never clears an untouched field.
+    fn focused_item_label(&mut self) -> Option<String> {
+        if self.query.trim().is_empty() {
+            return None;
+        }
+        let visible = self.visible_indices();
+        let &idx = visible.get(self.cursor)?;
+        let label = self.level_opt(idx)?.label.clone();
+        (!label.is_empty() && label != self.query).then_some(label)
+    }
+
     /// Whether the empty-state message applies. An untouched (empty or
     /// whitespace-only) search field must stay blank.
     fn shows_empty_message(&self) -> bool {
@@ -466,6 +479,7 @@ impl ModalApp {
             path,
             query: self.query.clone(),
             custom_input: false,
+            shortcut: None,
         }))
     }
 
@@ -496,6 +510,7 @@ impl ModalApp {
                     path: path.to_vec(),
                     query: self.query.clone(),
                     custom_input: false,
+                    shortcut: None,
                 }),
                 ctx,
             ),
@@ -514,6 +529,7 @@ impl ModalApp {
             path: nav_path.to_vec(),
             query: rest.to_string(),
             custom_input: true,
+            shortcut: None,
         };
         let _ = cp.execute(&sel, rest);
         sel
@@ -550,6 +566,23 @@ impl ModalApp {
                     self.activate_path(&path, ctx);
                 }
             }
+            ShortcutTarget::Pick(tag) => {
+                // Pick the highlighted row like Enter would, but tag the
+                // selection so the caller can interpret it differently.
+                let visible = self.visible_indices();
+                if visible.is_empty() {
+                    return true;
+                }
+                let cursor = self.cursor.min(visible.len() - 1);
+                match self.activate(&visible, cursor) {
+                    Some(RowAction::Pick(mut sel)) => {
+                        sel.shortcut = Some(tag);
+                        self.finish(Some(sel), ctx);
+                    }
+                    Some(RowAction::Drill { index }) => self.enter_level(index),
+                    None => {}
+                }
+            }
             ShortcutTarget::Action(action) => {
                 // Standalone commands have no row to land on: run the action
                 // (best-effort, detached) and close with no pick.
@@ -560,6 +593,7 @@ impl ModalApp {
                     path: Vec::new(),
                     query: String::new(),
                     custom_input: false,
+                    shortcut: None,
                 };
                 let _ = action.execute(&sel);
                 self.finish(None, ctx);
@@ -818,6 +852,7 @@ impl ModalApp {
                                 path,
                                 query: query.clone(),
                                 custom_input: false,
+                                shortcut: None,
                             }));
                         }
                         if action.is_some() {
@@ -973,6 +1008,7 @@ impl ModalApp {
                                             path,
                                             query: query.clone(),
                                             custom_input: false,
+                                            shortcut: None,
                                         }))
                                     };
                                     break;
@@ -1076,9 +1112,10 @@ impl eframe::App for ModalApp {
 
         let t = self.modal.theme.clone();
 
-        // With text in the focused search field, Left/Right belong to the
-        // caret, not to list/grid navigation: leave those events in the queue
-        // so the TextEdit can handle them.
+        // While the search field has text and focus, Left/Right/Home/End
+        // belong to the text cursor. The list navigation shortcuts only take
+        // them when the field is empty (or not focused), which keeps editing
+        // and list/submenu movement from fighting over the same keys.
         let editing_text = self.modal.search.enabled
             && !self.query.is_empty()
             && ctx.memory(|m| m.has_focus(self.search_id));
@@ -1104,20 +1141,12 @@ impl eframe::App for ModalApp {
             (
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
-                if editing_text {
-                    false
-                } else {
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)
-                },
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
-                if editing_text {
-                    false
-                } else {
-                    i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)
-                },
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
-                i.consume_key(egui::Modifiers::NONE, egui::Key::End),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::Home),
+                !editing_text && i.consume_key(egui::Modifiers::NONE, egui::Key::End),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::PageDown),
                 i.consume_key(egui::Modifiers::NONE, egui::Key::PageUp),
                 i.consume_key(egui::Modifiers::CTRL, egui::Key::N),
@@ -1136,6 +1165,13 @@ impl eframe::App for ModalApp {
         if tab {
             if let Some(cp) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
                 self.query = cp.prefix.clone();
+                self.cursor = 0;
+                tab_completed = true;
+            } else if let Some(label) = self.focused_item_label() {
+                // No prefix to finish: complete the search with the focused
+                // row instead. Counted as a normal programmatic edit below so
+                // the text cursor lands at the end of the label.
+                self.query = label;
                 self.cursor = 0;
                 tab_completed = true;
             }
@@ -1258,6 +1294,7 @@ impl eframe::App for ModalApp {
                             path: self.nav_path.clone(),
                             query: q,
                             custom_input: true,
+                            shortcut: None,
                         }),
                         ctx,
                     );
@@ -1374,6 +1411,8 @@ impl eframe::App for ModalApp {
                 }
                 if let Some(c) = prefix::completion(&self.modal.compiled_prefixes, &self.query) {
                     hints.push(format!("Tab ⇥ complete \"{}\"", c.prefix));
+                } else if let Some(label) = self.focused_item_label() {
+                    hints.push(format!("Tab ⇥ complete \"{label}\""));
                 }
                 if !hints.is_empty() {
                     ui.label(

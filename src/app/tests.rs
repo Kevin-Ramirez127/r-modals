@@ -716,6 +716,52 @@ fn submenu_list_arrows_navigate() {
     assert_eq!(app.cursor, 0);
 }
 
+/// Once the search field has text, Left/Right/Home/End move its caret instead
+/// of moving the row cursor. Empty-query list navigation remains covered by
+/// `submenu_list_arrows_navigate`.
+#[test]
+fn text_field_arrows_edit_the_query() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    assert!(ctx.memory(|m| m.has_focus(app.search_id)));
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(egui::Event::Text("Alpha".to_string()));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    assert_eq!(app.query, "Alpha");
+
+    let caret = |ctx: &egui::Context, app: &ModalApp| {
+        egui::TextEdit::load_state(ctx, app.search_id)
+            .and_then(|state| state.cursor.char_range())
+            .map(|range| range.primary.index)
+            .expect("text edit cursor")
+    };
+    assert_eq!(caret(&ctx, &app), 5);
+    let row = app.cursor;
+
+    for (key, expected) in [
+        (egui::Key::ArrowLeft, 4),
+        (egui::Key::Home, 0),
+        (egui::Key::End, 5),
+        (egui::Key::ArrowLeft, 4),
+        (egui::Key::ArrowRight, 5),
+    ] {
+        t += 1.0 / 60.0;
+        let mut inp = headless_input(t);
+        inp.events.push(key_event(key));
+        let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+        assert_eq!(caret(&ctx, &app), expected, "caret after {key:?}");
+        assert_eq!(app.cursor, row, "row cursor moved after {key:?}");
+        assert_eq!(app.query, "Alpha");
+    }
+}
+
 #[test]
 fn stationary_pointer_does_not_block_keyboard() {
     use eframe::App as _;
@@ -785,6 +831,34 @@ fn shortcut_key_picks_bound_option() {
         Some("b".to_string())
     );
     assert_eq!(app.modal.options[1].shortcut.as_deref(), Some("Ctrl+B"));
+}
+
+/// A `pick` shortcut selects the highlighted row and tags the selection.
+#[test]
+fn shortcut_pick_tags_the_highlighted_row() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, result) =
+        shortcut_app("[[shortcut]]\nkey = \"Shift+Enter\"\npick = \"username\"\n");
+    // Highlight the second row first.
+    app.cursor = 1;
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(modified_key_event(
+        egui::Key::Enter,
+        egui::Modifiers {
+            shift: true,
+            ..egui::Modifiers::NONE
+        },
+    ));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    let sel = result.lock().unwrap().clone().expect("a pick");
+    assert_eq!(sel.id, "b");
+    assert_eq!(sel.shortcut.as_deref(), Some("username"));
 }
 
 /// `consume_key` ignores extra shift/alt, so the richer combo must be
@@ -916,6 +990,41 @@ fn run_prefix_builds_selection_with_remainder() {
     assert!(sel.custom_input);
 }
 
+/// An `=` after the prefix delimits the parameter handed to the action.
+#[test]
+fn prefix_equals_parameter_reaches_the_action() {
+    use eframe::App as _;
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let seen = Arc::new(Mutex::new(None));
+    let slot = seen.clone();
+    let mut modal = crate::Modal::new("prefixes")
+        .option(crate::ModalOption::new("a", "Alpha"))
+        .prefix_action(
+            ">search",
+            crate::SelectAction::Callback(Arc::new(move |sel| {
+                *slot.lock().unwrap() = Some(sel.query.clone());
+            })),
+        );
+    modal.resolve_prefixes().unwrap();
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result.clone());
+    let mut frame = eframe::Frame::_new_kittest();
+
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    app.query = ">search=Hello World".to_string();
+    t += 1.0 / 60.0;
+    let out = ctx.run(enter_event(t), |ctx| app.update(ctx, &mut frame));
+
+    assert!(viewport_closed(&out), "prefix should close the modal");
+    assert!(result.lock().unwrap().is_none());
+    assert_eq!(seen.lock().unwrap().as_deref(), Some("Hello World"));
+}
+
 #[test]
 fn streaming_options_fill_the_loading_modal() {
     let ctx = egui::Context::default();
@@ -963,6 +1072,57 @@ fn empty_search_field_hides_the_empty_message() {
 
     app.query = "ab".to_string();
     assert!(app.shows_empty_message());
+}
+
+/// With no partial prefix, Tab completes the focused row's label.
+#[test]
+fn tab_completes_the_focused_item() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = "Al".to_string();
+    t += 1.0 / 60.0;
+    let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::Tab));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+
+    assert_eq!(app.query, "Alpha");
+    let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    let range = state.cursor.char_range().expect("cursor range");
+    assert_eq!(range.primary.index, app.query.chars().count());
+    assert_eq!(range.secondary.index, app.query.chars().count());
+}
+
+/// Tab completion prefers a partial prefix over the focused row.
+#[test]
+fn tab_prefers_a_prefix_completion_over_the_item() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app(
+        "[[prefix]]\nprefix = \">s\"\nshell = \"true\"\n         [[prefix]]\nprefix = \">sync\"\nshell = \"true\"\n",
+    );
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = ">s".to_string();
+    t += 1.0 / 60.0;
+    let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::Tab));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+
+    assert_eq!(app.query, ">sync");
 }
 
 /// Tab completes a partially typed prefix and leaves the cursor at the end.

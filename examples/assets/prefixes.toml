@@ -13,11 +13,13 @@
 #   hint = "..."              label shown in the hint / handed to the action
 #
 # Type the prefix and press Enter to run its action; the text after the prefix
-# (the remainder) replaces the `{query}` token. When no `{query}` is present
-# the remainder is appended: a trailing argument for `command`, or a single
-# shell-quoted word for `shell`. In `shell`, `{query}` is inserted
-# shell-quoted, so don't wrap it in quotes yourself. A bare prefix (empty
-# remainder) still runs the action.
+# (the remainder) replaces the `{query}` token. An `=` right after the prefix
+# (spaces allowed) separates an explicit parameter, so `>search=Hello World`
+# and `>search Hello World` both pass `Hello World`; the `=` is not included.
+# When no `{query}` is present the remainder is appended: a trailing argument
+# for `command`, or a single shell-quoted word for `shell`. In `shell`,
+# `{query}` is inserted shell-quoted, so don't wrap it in quotes yourself. A
+# bare prefix (empty remainder) still runs the action.
 #
 # More than one prefix may match; the longest wins (">>" beats ">").
 
