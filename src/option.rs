@@ -131,10 +131,14 @@ impl SelectAction {
                 .spawn()
                 .map(|_| ()),
             SelectAction::Shell(cmd) => {
+                // Absolute helper path on Unix avoids picking up a different
+                // `sh` from the caller's PATH. Windows shell actions only
+                // reach this point with static, trusted command strings (see
+                // `prefix::resolve_action`).
                 let (prog, flag) = if cfg!(windows) {
                     ("cmd", "/C")
                 } else {
-                    ("sh", "-c")
+                    ("/bin/sh", "-c")
                 };
                 std::process::Command::new(prog)
                     .args([flag, cmd])
@@ -364,12 +368,16 @@ impl ModalOption {
     }
 
     /// Run a shell one-liner when this option is picked
-    /// (`sh -c` on unix, `cmd /C` on Windows), spawned detached:
+    /// (`/bin/sh -c` on unix, `cmd /C` on Windows), spawned detached:
     ///
     /// ```no_run
     /// use r_modals::ModalOption;
     /// let opt = ModalOption::new("up", "Update").shell("notify-send done && apt update");
     /// ```
+    ///
+    /// This string is trusted config, not user input. Prefix actions that
+    /// interpolate the typed query into a shell are refused on Windows; use
+    /// `command` + `args` for query text that must be portable.
     pub fn shell(mut self, cmdline: impl Into<String>) -> Self {
         self.action = Some(SelectAction::Shell(cmdline.into()));
         self

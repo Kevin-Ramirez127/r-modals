@@ -397,6 +397,56 @@ fn history_sorts_most_used_first() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn history_does_not_follow_symlinks() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!(
+        "qm-hist-link-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let target = dir.join("canary.txt");
+    let link = dir.join("hist.txt");
+    std::fs::write(&target, "a 9\n").unwrap();
+    symlink(&target, &link).unwrap();
+
+    // Loading ignores the symlink instead of reading the target.
+    let m = Modal::new("x").history_file(link.to_str().unwrap());
+    assert!(Modal::load_history(link.to_str().unwrap()).is_empty());
+    // Recording refuses to replace the symlink or write through it.
+    m.record_history("b");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "a 9\n");
+    assert!(std::fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn history_rejects_oversized_files() {
+    let dir = std::env::temp_dir().join(format!(
+        "qm-hist-big-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("hist.txt");
+    std::fs::write(&path, vec![b'a'; super::HISTORY_MAX_BYTES + 1]).unwrap();
+    assert!(Modal::load_history(path.to_str().unwrap()).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn min_match_chars_hides_the_full_list() {
     let m = Modal::new("x")

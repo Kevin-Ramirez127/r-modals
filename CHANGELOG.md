@@ -2,6 +2,25 @@
 
 ## 0.2.0 — unreleased
 
+### Security hardening
+- Windows: dynamic `shell` interpolation (`{query}` / appended remainder) now
+  fails closed instead of being quoted for `cmd.exe`, which cannot escape
+  `%VAR%` expansion safely. Use `command` + `args = ["{query}"]`; static shell
+  commands and Unix quoting are unchanged. Unix shell actions use `/bin/sh`.
+- Config, pid, and history files are written atomically through a `0600`
+  `create_new` sibling; symlinks/non-regular targets are refused and history
+  reads are limited to regular files (1 MiB / 4096 entries).
+- `ConfigFile::var` values are TOML-escaped and substituted once, preventing
+  TOML injection and recursive `{token}` expansion.
+- `Dialog` passes labels/titles/messages after `--`; the child parser supports
+  `--` to stop option parsing (no more argument injection through titles).
+- Stdin option streams are bounded (64 KiB/line, 100k options, 64 MiB total);
+  control characters are stripped from option input and printed selections.
+- Icons enforce a 4096×4096 / 64 MiB decode limit with checked size
+  arithmetic for raw RGBA pixels.
+- Auto-loaded XDG config files are ignored when group/world-writable. See
+  `SECURITY.md`.
+
 ### Spawnable dialog backend
 - `Dialog::menu()/ask()/confirm()/error()` + `DialogSession` spawn the current
   executable (or `.program(path)`), stream `id<TAB>label` options into a menu,

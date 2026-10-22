@@ -198,7 +198,7 @@ fn resolve_action_substitutes_placeholder() {
         program: "sh".to_string(),
         args: vec!["-c".to_string(), "echo {query}".to_string()],
     };
-    match resolve_action(&action, "hello world") {
+    match resolve_action(&action, "hello world").unwrap() {
         SelectAction::Command { program, args } => {
             assert_eq!(program, "sh");
             assert_eq!(args, vec!["-c".to_string(), "echo hello world".to_string()]);
@@ -207,7 +207,7 @@ fn resolve_action_substitutes_placeholder() {
     }
 
     // Shell placeholder is single-quoted (one word, no splitting).
-    let sh = resolve_action(&shell("notify-send {query}"), "hi there");
+    let sh = resolve_action(&shell("notify-send {query}"), "hi there").unwrap();
     assert!(matches!(sh, SelectAction::Shell(c) if c == "notify-send 'hi there'"));
 }
 
@@ -218,7 +218,7 @@ fn resolve_action_appends_without_placeholder() {
         program: "notify-send".to_string(),
         args: vec!["-a".to_string(), "r-modals".to_string()],
     };
-    match resolve_action(&action, "build done") {
+    match resolve_action(&action, "build done").unwrap() {
         SelectAction::Command { args, .. } => {
             assert_eq!(args, vec!["-a", "r-modals", "build done"]);
         }
@@ -226,16 +226,16 @@ fn resolve_action_appends_without_placeholder() {
     }
 
     // Empty remainder leaves the action untouched.
-    match resolve_action(&action, "") {
+    match resolve_action(&action, "").unwrap() {
         SelectAction::Command { args, .. } => assert_eq!(args, vec!["-a", "r-modals"]),
         other => panic!("expected command, got {other:?}"),
     }
 
     // Shell: remainder appended as one quoted word.
-    let sh = resolve_action(&shell("notify-send"), "hi there");
+    let sh = resolve_action(&shell("notify-send"), "hi there").unwrap();
     assert!(matches!(sh, SelectAction::Shell(c) if c == "notify-send 'hi there'"));
     // Single quotes are escaped so the word stays one shell argument.
-    let sh = resolve_action(&shell("notify-send"), "it's ok");
+    let sh = resolve_action(&shell("notify-send"), "it's ok").unwrap();
     assert!(matches!(sh, SelectAction::Shell(c) if c == "notify-send 'it'\\''s ok'"));
 }
 
@@ -243,8 +243,31 @@ fn resolve_action_appends_without_placeholder() {
 fn resolve_action_leaves_callbacks_untouched() {
     let cb = SelectAction::Callback(std::sync::Arc::new(|_| {}));
     assert!(matches!(
-        resolve_action(&cb, "x"),
+        resolve_action(&cb, "x").unwrap(),
         SelectAction::Callback(_)
+    ));
+}
+
+#[test]
+fn windows_shell_interpolation_fails_closed() {
+    // Static shell commands stay usable…
+    let static_shell = resolve_action_for(&shell("notify-send done"), "", true).unwrap();
+    assert!(matches!(static_shell, SelectAction::Shell(c) if c == "notify-send done"));
+
+    // …but any dynamic query interpolation is refused rather than quoted by
+    // cmd.exe, which cannot safely quote `%VAR%` / `&` / `^` input.
+    assert!(resolve_action_for(&shell("notify-send {query}"), "hi", true).is_err());
+    assert!(resolve_action_for(&shell("notify-send"), "hi", true).is_err());
+
+    // Command + args remains the safe portable path.
+    let command = SelectAction::Command {
+        program: "notify-send".to_string(),
+        args: vec!["{query}".to_string()],
+    };
+    let resolved = resolve_action_for(&command, "hi & calc", true).unwrap();
+    assert!(matches!(
+        resolved,
+        SelectAction::Command { args, .. } if args == vec!["hi & calc"]
     ));
 }
 

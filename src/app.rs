@@ -531,7 +531,10 @@ impl ModalApp {
             custom_input: true,
             shortcut: None,
         };
-        let _ = cp.execute(&sel, rest);
+        if let Err(e) = cp.execute(&sel, rest) {
+            // e.g. a dynamic `shell` prefix on Windows, which fails closed.
+            eprintln!("r-modals: prefix action failed: {e}");
+        }
         sel
     }
 
@@ -1034,6 +1037,12 @@ impl ModalApp {
     }
 }
 
+/// Upper bound on one decoded icon edge. Icons are rendered at most a few
+/// hundred pixels; anything larger is a decompression-bomb candidate.
+const MAX_ICON_EDGE: usize = 4096;
+/// Upper bound on decoded RGBA memory per icon.
+const MAX_ICON_BYTES: usize = 64 * 1024 * 1024;
+
 fn load_icon(icon: &IconSource) -> Option<egui::ColorImage> {
     match icon {
         IconSource::None => None,
@@ -1047,7 +1056,14 @@ fn load_icon(icon: &IconSource) -> Option<egui::ColorImage> {
             height,
             rgba,
         } => {
-            if rgba.len() != width * height * 4 {
+            if *width == 0 || *height == 0 || *width > MAX_ICON_EDGE || *height > MAX_ICON_EDGE {
+                return None;
+            }
+            // `width * height * 4` can overflow `usize` on 32-bit targets; an
+            // overflow would wrap to a small value and slip past the length
+            // check, so compute it checked.
+            let expected = width.checked_mul(*height).and_then(|n| n.checked_mul(4))?;
+            if expected != rgba.len() || expected > MAX_ICON_BYTES {
                 return None;
             }
             Some(egui::ColorImage::from_rgba_premultiplied(
@@ -1059,7 +1075,18 @@ fn load_icon(icon: &IconSource) -> Option<egui::ColorImage> {
 }
 
 fn decode_bytes(bytes: &[u8]) -> Option<egui::ColorImage> {
-    let dyn_img = image::load_from_memory(bytes).ok()?;
+    // Decode through `ImageReader` so dimensions and total allocation are
+    // bounded *before* a malicious header can make the decoder allocate
+    // gigabytes.
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(MAX_ICON_EDGE as u32);
+    limits.max_image_height = Some(MAX_ICON_EDGE as u32);
+    limits.max_alloc = Some(MAX_ICON_BYTES as u64);
+    reader.limits(limits);
+    let dyn_img = reader.decode().ok()?;
     // Downscale once at decode time: icons render at `icon_size` (28px) and
     // grid tiles at <= 200px, so uploading a 4000px photo as a GPU texture
     // wastes memory, upload bandwidth, and sampler cost every frame it is

@@ -30,6 +30,11 @@
 //! extra argument for `command`, or as a single shell-quoted word for
 //! `shell`. So `>` alone (empty remainder) still runs the bare action.
 //!
+//! On Windows, `shell` actions may not interpolate dynamic text: `cmd.exe`
+//! cannot quote arbitrary values safely (percent expansion happens before
+//! parsing). Static shell commands still run; for anything involving
+//! `{query}` use `command` + `args`, which never passes through a shell.
+//!
 //! [`crate::Modal::prefixes_file`] loads a file, [`crate::Modal::prefixes_toml`]
 //! takes inline TOML, and [`crate::Modal::prefix`] adds one entry in code.
 //! Longest prefixes win when several match (`>>` beats `>`).
@@ -318,7 +323,20 @@ fn substitute(text: &str, rest: &str, quote: bool) -> String {
 /// when an action sets no placeholder the remainder is appended (extra
 /// argument for `command`, shell-quoted word for `shell`). Callbacks are
 /// returned as-is — they read the remainder from the selection's `query`.
-pub(crate) fn resolve_action(action: &SelectAction, rest: &str) -> SelectAction {
+///
+/// On Windows, dynamic `shell` interpolation is rejected: `cmd.exe` cannot
+/// safely quote arbitrary text (`%VAR%` expands before parsing, so even
+/// quoted values can inject metacharacters). Use `command` + `args` there,
+/// which never goes through a shell.
+pub(crate) fn resolve_action(action: &SelectAction, rest: &str) -> Result<SelectAction, String> {
+    resolve_action_for(action, rest, cfg!(windows))
+}
+
+fn resolve_action_for(
+    action: &SelectAction,
+    rest: &str,
+    windows: bool,
+) -> Result<SelectAction, String> {
     match action {
         SelectAction::Command { program, args } => {
             let placeholder =
@@ -329,21 +347,28 @@ pub(crate) fn resolve_action(action: &SelectAction, rest: &str) -> SelectAction 
             if !placeholder && !rest.is_empty() {
                 resolved.push(rest.to_string());
             }
-            SelectAction::Command {
+            Ok(SelectAction::Command {
                 program,
                 args: resolved,
-            }
+            })
         }
         SelectAction::Shell(cmd) => {
+            if windows && (cmd.contains("{query}") || !rest.is_empty()) {
+                return Err(
+                    "dynamic shell actions are unsafe on Windows: use `command` + `args` \
+                     (with `\"{query}\"` in args) instead"
+                        .to_string(),
+                );
+            }
             if cmd.contains("{query}") {
-                SelectAction::Shell(substitute(cmd, rest, true))
+                Ok(SelectAction::Shell(substitute(cmd, rest, true)))
             } else if rest.is_empty() {
-                SelectAction::Shell(cmd.clone())
+                Ok(SelectAction::Shell(cmd.clone()))
             } else {
-                SelectAction::Shell(format!("{cmd} {}", shell_quote(rest)))
+                Ok(SelectAction::Shell(format!("{cmd} {}", shell_quote(rest))))
             }
         }
-        SelectAction::Callback(_) => action.clone(),
+        SelectAction::Callback(_) => Ok(action.clone()),
     }
 }
 
@@ -351,7 +376,9 @@ impl CompiledPrefix {
     /// Fire this prefix's action with the query remainder. `sel.query` holds
     /// the remainder for callbacks; `sel.label` is the prefix's hint.
     pub(crate) fn execute(&self, sel: &crate::ModalSelection, rest: &str) -> std::io::Result<()> {
-        resolve_action(&self.action, rest).execute(sel)
+        let resolved = resolve_action(&self.action, rest)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+        resolved.execute(sel)
     }
 }
 

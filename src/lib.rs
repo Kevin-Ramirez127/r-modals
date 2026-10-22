@@ -48,6 +48,7 @@ mod confirm;
 mod css;
 mod dialog;
 mod error;
+mod fsutil;
 mod modal;
 mod multi;
 mod option;

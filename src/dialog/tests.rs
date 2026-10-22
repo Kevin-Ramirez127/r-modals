@@ -141,6 +141,92 @@ fn ids_cannot_break_the_line_protocol() {
 }
 
 #[test]
+fn double_dash_stops_option_parsing() {
+    let o = parse_child_opts(&args(&["--password", "--", "--help"])).unwrap();
+    assert!(o.password);
+    assert_eq!(o.positional.as_deref(), Some("--help"));
+
+    // Without the separator, a leading dash is still rejected as a flag.
+    assert!(parse_child_opts(&args(&["--help"])).is_err());
+    // A separator on its own is not a positional.
+    assert!(parse_child_opts(&args(&["--"]))
+        .unwrap()
+        .positional
+        .is_none());
+    // Only one positional is accepted.
+    assert!(parse_child_opts(&args(&["--", "one", "two"])).is_err());
+}
+
+#[test]
+fn control_characters_cannot_reach_the_terminal_or_line_protocol() {
+    // ESC/OSC sequences and newlines are neutralised in labels and ids.
+    let opt = parse_option_line("i\x1b\tl\x07abel").unwrap();
+    assert_eq!(opt.id, "i ");
+    assert_eq!(opt.label, "l abel");
+
+    let mut sel = selection();
+    sel.label = "evil\x1b[2Jlabel".to_string();
+    assert_eq!(
+        format_selection(&sel, OutputFormat::Label),
+        "evil [2Jlabel\n"
+    );
+    sel.id = "a\tb\x07".to_string();
+    assert_eq!(format_selection(&sel, OutputFormat::Id), "a b \n");
+}
+
+#[test]
+fn option_lines_are_bounded() {
+    let mut options = Vec::new();
+    // Exactly the limit (without the newline) is accepted.
+    let mut input = vec![b'a'; MAX_OPTION_LINE];
+    input.push(b'\n');
+    read_options_into(&mut std::io::Cursor::new(input), &mut options).unwrap();
+    assert_eq!(options.len(), 1);
+    assert_eq!(options[0].id.len(), MAX_OPTION_LINE);
+
+    // One byte over is rejected without buffering the rest of the line.
+    let mut input = vec![b'a'; MAX_OPTION_LINE + 1];
+    input.extend_from_slice(b"\nshort\n");
+    let mut options = Vec::new();
+    assert!(read_options_into(&mut std::io::Cursor::new(input), &mut options).is_err());
+}
+
+#[cfg(unix)]
+#[test]
+fn dialog_positionals_are_passed_after_double_dash() {
+    let capture = std::env::temp_dir().join(format!(
+        "r-modals-argv-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let (dir, script) = fake_child(
+        "argv",
+        &format!("printf '%s\\n' \"$@\" > '{}'", capture.display()),
+    );
+
+    // A title that looks like a flag must arrive as data, not as an option.
+    let output = Dialog::ask("--password").program(&script).run().unwrap();
+    assert!(matches!(output, DialogOutput::Text(ref s) if s.is_empty()));
+
+    let argv = std::fs::read_to_string(&capture).unwrap();
+    assert_eq!(argv, "--ask\n--\n--password\n");
+
+    let _ = std::fs::remove_dir_all(&dir);
+    let _ = std::fs::remove_file(&capture);
+}
+
+#[test]
+fn child_output_is_capped_but_fully_drained() {
+    // The reader consumes the whole stream (so the child cannot deadlock on a
+    // full pipe) while retaining only the first `limit` bytes.
+    let out = read_all_capped(std::io::Cursor::new(vec![b'a'; 10_000]), 16).unwrap();
+    assert_eq!(out, vec![b'a'; 16]);
+}
+
+#[test]
 fn theme_names_and_inline_css_resolve() {
     let (theme, css) = resolve_theme(Some("dark")).unwrap();
     assert_eq!(theme.background, Theme::dark().background);
