@@ -121,6 +121,12 @@ exact prefix, `Tab` extends it). When the query does not start a partial prefix,
 
 `{query}` is replaced by the remainder. In `shell` it is inserted shell-quoted (don't wrap it in quotes yourself); when an action sets no `{query}` the remainder is appended — a trailing argument for `command`, a single quoted word for `shell`. Put an `=` right after the prefix (spaces around it are fine) to pass an explicit parameter, so `>search=Hello World` hands `Hello World` to the action just like `>search Hello World`; the `=` itself is never part of it. A bare prefix (empty remainder) still runs its action, and the longest matching prefix wins (`>>` beats `>`). A missing/invalid file makes `run()` return `ModalError::Prefixes`. CLI: `r-modals --menu --prefixes FILE` (or `--no-prefixes` to skip the default file). See `examples/assets/prefixes.toml` for the full reference.
 
+> **Windows:** dynamic `shell` actions (`{query}` or a non-empty remainder)
+> fail closed because `cmd.exe` cannot quote untrusted text safely. Use
+> `command` + `args = ["{query}"]` there; it is argv-based and equally safe on
+> Unix. Auto-loaded config files that are group/world-writable are ignored.
+> See [`SECURITY.md`](SECURITY.md) for the full threat model.
+
 ## Dialogs
 
 ```rust
