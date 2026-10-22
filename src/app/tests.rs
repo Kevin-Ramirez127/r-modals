@@ -1151,3 +1151,39 @@ fn tab_completes_the_closest_prefix() {
     assert_eq!(range.primary.index, app.query.chars().count());
     assert_eq!(range.secondary.index, app.query.chars().count());
 }
+
+/// With text in the search field, Left/Right edit the caret instead of
+/// moving through the list/grid.
+#[test]
+fn arrow_keys_move_the_caret_in_a_non_empty_search() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = prefix_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+
+    app.query = "abc".to_string();
+    let mut state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    state
+        .cursor
+        .set_char_range(Some(egui::text::CCursorRange::one(
+            egui::text::CCursor::new(0),
+        )));
+    state.store(&ctx, app.search_id);
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::ArrowRight));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    assert_eq!(state.cursor.char_range().expect("range").primary.index, 1);
+
+    t += 1.0 / 60.0;
+    let mut inp = headless_input(t);
+    inp.events.push(key_event(egui::Key::ArrowLeft));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
+    let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
+    assert_eq!(state.cursor.char_range().expect("range").primary.index, 0);
+}
