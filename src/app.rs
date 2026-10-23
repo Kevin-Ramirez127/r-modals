@@ -149,23 +149,9 @@ impl ModalApp {
         // bytes or (re)builds search strings.
         app.refresh_level_caches();
         app.refresh_filter_cache();
-        // Custom fonts: install into egui and set as default family.
-        if !app.modal.fonts.is_empty() {
-            let mut fonts = egui::FontDefinitions::default();
-            for (name, bytes) in &app.modal.fonts {
-                fonts.font_data.insert(
-                    name.clone(),
-                    egui::FontData::from_owned(bytes.clone()).into(),
-                );
-                if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
-                    fam.insert(0, name.clone());
-                }
-                if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
-                    fam.insert(0, name.clone());
-                }
-            }
-            cc.egui_ctx.set_fonts(fonts);
-        }
+        // Install fonts once: custom fonts become the primary family, and
+        // Hack is appended so proportional hint text can draw arrow glyphs.
+        cc.egui_ctx.set_fonts(font_definitions(&app.modal.fonts));
         // Initial cursor honors `default_selected` when visible.
         app.select_default();
         app
@@ -1042,6 +1028,38 @@ impl ModalApp {
 const MAX_ICON_EDGE: usize = 4096;
 /// Upper bound on decoded RGBA memory per icon.
 const MAX_ICON_BYTES: usize = 64 * 1024 * 1024;
+
+/// egui's built-in fonts plus any custom fonts registered on the modal.
+///
+/// Custom fonts go first in both families, matching `.font(..)`'s "set as
+/// default" contract. Hack is appended as the *last* proportional fallback
+/// because egui only lists it under Monospace, yet it is the only bundled
+/// font with the arrows used by the hint line and the custom-input hint
+/// (`↵` U+21B5, `⇥` U+21E5). Without it those glyphs render as tofu boxes.
+fn font_definitions(custom: &[(String, Vec<u8>)]) -> egui::FontDefinitions {
+    let mut fonts = egui::FontDefinitions::default();
+    for (name, bytes) in custom {
+        fonts.font_data.insert(
+            name.clone(),
+            egui::FontData::from_owned(bytes.clone()).into(),
+        );
+        if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            fam.insert(0, name.clone());
+        }
+        if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Monospace) {
+            fam.insert(0, name.clone());
+        }
+    }
+    // Guard the name: `default_fonts` may be disabled by the consumer.
+    if fonts.font_data.contains_key("Hack") {
+        if let Some(fam) = fonts.families.get_mut(&egui::FontFamily::Proportional) {
+            if !fam.iter().any(|f| f == "Hack") {
+                fam.push("Hack".to_owned());
+            }
+        }
+    }
+    fonts
+}
 
 fn load_icon(icon: &IconSource) -> Option<egui::ColorImage> {
     match icon {

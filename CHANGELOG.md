@@ -65,6 +65,8 @@
   `ModalOption::keywords`/`keyword` (matched in both search modes)
 - `Modal::default_selected`, `Modal::allow_custom_input` (command-palette free text),
   `Modal::empty_message`, `Modal::footer_hint`, `Modal::max_results`
+- Hint arrows (`↵` run, `⇥` complete) now fall back to egui's bundled Hack
+  font instead of rendering as tofu boxes
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
 - First-query-occurrence highlight (underline, no layout shift)
 

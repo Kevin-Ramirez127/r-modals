@@ -67,6 +67,35 @@ fn load_icon_variants() {
     assert!(load_icon(&IconSource::None).is_none());
 }
 
+#[test]
+fn proportional_fonts_fall_back_to_hack_for_arrow_glyphs() {
+    let fonts = font_definitions(&[]);
+    let proportional = &fonts.families[&egui::FontFamily::Proportional];
+    assert_eq!(proportional.last().map(String::as_str), Some("Hack"));
+
+    // Renderer-level check: the hint glyphs must actually resolve.
+    let ctx = egui::Context::default();
+    ctx.set_fonts(fonts);
+    // Fonts only exist after the first pass.
+    let _ = ctx.run(headless_input(0.0), |_| {});
+    ctx.fonts(|f| {
+        let font = egui::FontId::proportional(15.0);
+        assert!(f.has_glyph(&font, '↵'), "Enter arrow (U+21B5) missing");
+        assert!(f.has_glyph(&font, '⇥'), "Tab arrow (U+21E5) missing");
+    });
+}
+
+#[test]
+fn custom_fonts_stay_primary_and_hack_stays_last() {
+    let fonts = font_definitions(&[("Custom".to_owned(), Vec::new())]);
+    let proportional = &fonts.families[&egui::FontFamily::Proportional];
+    let monospace = &fonts.families[&egui::FontFamily::Monospace];
+    assert_eq!(proportional.first().map(String::as_str), Some("Custom"));
+    assert_eq!(monospace.first().map(String::as_str), Some("Custom"));
+    assert_eq!(proportional.last().map(String::as_str), Some("Hack"));
+    assert!(fonts.font_data.contains_key("Custom"));
+}
+
 fn headless_input(time: f64) -> egui::RawInput {
     headless_input_w(time, 600.0)
 }
