@@ -14,7 +14,7 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
 - **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
 - **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`; both render a visible title (`.show_title(false)` to hide) and accept `.stylesheet(..)`/`.position(..)`
-- **Workspaces** — `.workspace("2")` opens the window on a compositor workspace (Hyprland, Sway, i3, niri, KDE, generic X11); `.workspace(Workspace::new("code").focus(false))` controls focus and compositor detection
+- **Workspaces** — `.workspace("2")` opens the window on a compositor workspace (Hyprland, Sway, i3, niri, KDE, generic X11); `.workspace(Workspace::new("code").change_focus(false))` moves it there without focusing it
 - **Spawnable dialogs** — `Dialog::menu()/ask()/confirm()/error()` start the current executable as a dialog child (`dialog_main!()`), stream typed options in, and return a typed `DialogOutput`; `--menu`, `--ask`, `--confirm`, and `--error` give shell scripts the same contract
 - **Unified config** — `ConfigFile` creates `config.toml`, appends built-ins once, migrates the old split files, and expands `{exe}` to the running executable
 - **Layouts** — `List` rows or `Grid` image tiles
@@ -157,7 +157,7 @@ Modal::new("Pick one")
     .unwrap();
 
 Confirm::new("Continue?")
-    .workspace(Workspace::new("code").focus(false))
+    .workspace(Workspace::new("code").change_focus(false))
     .run()
     .unwrap();
 ```
@@ -176,16 +176,17 @@ backends:
 
 Detection is automatic; override it with
 `Workspace::compositor(Compositor::Sway)`. `Workspace::special("scratch")`
-targets a Hyprland special workspace. `.focus(false)` asks the compositor not
-to switch to the target workspace, though a focused window may still follow
-it. GNOME Shell and unknown Wayland compositors do not expose an
-application-level workspace API, so the window stays where the compositor
-put it.
+targets a Hyprland special workspace. `.change_focus(false)` moves the window
+to the target workspace without switching to it or giving the new window
+focus (`.focus(false)` is an alias). This is best-effort: compositors without
+a silent-move primitive may still raise the window. GNOME Shell and unknown
+Wayland compositors do not expose an application-level workspace API, so the
+window stays where the compositor put it.
 
 The same builder method exists on `Confirm`, `Prompt`, and `Dialog`
 (`Dialog::menu().workspace("2")` passes `--workspace` to the child). The CLI
-accepts `--workspace NAME`, `--workspace-silent`, and
-`--workspace-compositor NAME`.
+accepts `--workspace NAME`, `--workspace-no-focus` (alias:
+`--workspace-silent`), and `--workspace-compositor NAME`.
 
 ## Spawning dialogs
 

@@ -143,7 +143,7 @@ impl FromStr for Compositor {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
     name: String,
-    focus: bool,
+    change_focus: bool,
     compositor: Option<Compositor>,
 }
 
@@ -152,7 +152,7 @@ impl Workspace {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            focus: true,
+            change_focus: true,
             compositor: None,
         }
     }
@@ -167,14 +167,20 @@ impl Workspace {
         Self::new(format!("special:{}", name.into()))
     }
 
-    /// Switch to the workspace after moving the window. Defaults to `true`.
+    /// Focus the new window after placing it. Defaults to `true`.
     ///
-    /// With `false`, the compositor is asked to move the window without
-    /// explicitly focusing the target workspace. Some compositors still
-    /// switch when the moved window has focus.
-    pub fn focus(mut self, yes: bool) -> Self {
-        self.focus = yes;
+    /// With `false`, the window is moved to the target workspace without
+    /// switching to that workspace or giving the window focus. This is
+    /// best-effort: a compositor without a silent-move primitive may still
+    /// raise the window.
+    pub fn change_focus(mut self, yes: bool) -> Self {
+        self.change_focus = yes;
         self
+    }
+
+    /// Alias for [`Workspace::change_focus`].
+    pub fn focus(self, yes: bool) -> Self {
+        self.change_focus(yes)
     }
 
     /// Override compositor detection.
@@ -188,9 +194,14 @@ impl Workspace {
         &self.name
     }
 
-    /// Whether the target workspace should be focused after the move.
+    /// Whether the new window should receive focus. Defaults to `true`.
+    pub fn changes_focus(&self) -> bool {
+        self.change_focus
+    }
+
+    /// Alias for [`Workspace::changes_focus`].
     pub fn focused(&self) -> bool {
-        self.focus
+        self.changes_focus()
     }
 
     /// Explicit compositor override, if any.
@@ -356,7 +367,7 @@ fn place_hyprland(
     let output = run("hyprctl", &["clients", "-j"])?;
     let address = parse_hyprland_clients(&output.stdout, pid, app_id, title)
         .ok_or(WorkspaceError::NotFound)?;
-    let dispatch = if workspace.focus {
+    let dispatch = if workspace.change_focus {
         "movetoworkspace"
     } else {
         "movetoworkspacesilent"
@@ -417,7 +428,7 @@ fn place_sway(
     let ws = sway_token(&workspace.name);
     let move_cmd = format!("[con_id={con_id}] move container to workspace {ws}");
     run(program, &[&move_cmd])?;
-    if workspace.focus {
+    if workspace.change_focus {
         let focus_cmd = format!("workspace {ws}");
         run(program, &[&focus_cmd])?;
     }
@@ -498,12 +509,12 @@ fn place_niri(
         "--window-id",
         id.as_str(),
     ];
-    if !workspace.focus {
+    if !workspace.change_focus {
         args.extend(["--focus", "false"]);
     }
     args.push(ws);
     run("niri", &args)?;
-    if workspace.focus {
+    if workspace.change_focus {
         run("niri", &["msg", "action", "focus-workspace", ws])?;
     }
     Ok(())
@@ -585,7 +596,7 @@ fn place_kde(
         .collect();
     let id = ids.first().ok_or(WorkspaceError::NotFound)?;
     run("kdotool", &["set_desktop_for_window", id, desktop])?;
-    if workspace.focus {
+    if workspace.change_focus {
         run("kdotool", &["set_desktop", desktop])?;
     }
     Ok(())
@@ -604,7 +615,7 @@ fn place_x11(
     let output = run("wmctrl", &["-lp"])?;
     let window = parse_wmctrl_lp(&output.stdout, pid, title).ok_or(WorkspaceError::NotFound)?;
     run("wmctrl", &["-i", "-r", &window, "-t", &desktop])?;
-    if workspace.focus {
+    if workspace.change_focus {
         run("wmctrl", &["-s", &desktop])?;
     }
     Ok(())
@@ -673,7 +684,9 @@ mod tests {
         assert_eq!(Workspace::new("2").name(), "2");
         assert_eq!(Workspace::index(3).name(), "3");
         assert_eq!(Workspace::special("scratch").name(), "special:scratch");
-        assert!(Workspace::new("2").focused());
+        assert!(Workspace::new("2").changes_focus());
+        assert!(!Workspace::new("2").change_focus(false).changes_focus());
+        // `focus`/`focused` remain aliases.
         assert!(!Workspace::new("2").focus(false).focused());
         assert_eq!(
             Workspace::new("2")

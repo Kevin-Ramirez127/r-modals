@@ -18,7 +18,8 @@ fn print_help() {
          COMMON OPTIONS\n\
          \x20  --app-id ID             Wayland app_id / X11 class hint\n\
          \x20  --workspace NAME        open on a compositor workspace\n\
-         \x20  --workspace-silent      move without focusing the workspace\n\
+         \x20  --workspace-no-focus    move there without focusing the window\n\
+         \x20  --workspace-silent      alias of --workspace-no-focus\n\
          \x20  --workspace-compositor C  auto|hyprland|sway|i3|niri|kde|x11\n\
          \x20  --pid-file PATH         write the window pid for hide/toggle\n\
          \x20  --theme NAME|PATH|CSS   dark|light|transparent|auto,\n\

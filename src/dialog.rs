@@ -338,8 +338,8 @@ impl Dialog {
         }
         if let Some(workspace) = &self.workspace {
             cmd.arg("--workspace").arg(workspace.name());
-            if !workspace.focused() {
-                cmd.arg("--workspace-silent");
+            if !workspace.changes_focus() {
+                cmd.arg("--workspace-no-focus");
             }
             if let Some(compositor) = workspace.compositor_override() {
                 cmd.arg("--workspace-compositor")
@@ -682,7 +682,7 @@ struct ChildOpts {
     config: Option<PathBuf>,
     app_id: String,
     workspace: Option<String>,
-    workspace_focus: bool,
+    workspace_change_focus: bool,
     workspace_compositor: Option<Compositor>,
     pid_file: Option<PathBuf>,
     loading_message: Option<String>,
@@ -721,7 +721,7 @@ impl Default for ChildOpts {
             config: None,
             app_id: "r-modals".to_string(),
             workspace: None,
-            workspace_focus: true,
+            workspace_change_focus: true,
             workspace_compositor: None,
             pid_file: None,
             loading_message: None,
@@ -858,7 +858,7 @@ fn parse_child_opts(args: &[OsString]) -> Result<ChildOpts, String> {
             "--config" => o.config = Some(PathBuf::from(next(&mut i)?)),
             "--app-id" => o.app_id = next(&mut i)?,
             "--workspace" => o.workspace = Some(next(&mut i)?),
-            "--workspace-silent" => o.workspace_focus = false,
+            "--workspace-silent" | "--workspace-no-focus" => o.workspace_change_focus = false,
             "--workspace-compositor" => {
                 o.workspace_compositor = Some(next(&mut i)?.parse::<Compositor>()?)
             }
@@ -887,7 +887,7 @@ fn parse_child_opts(args: &[OsString]) -> Result<ChildOpts, String> {
 
 fn child_workspace(o: &ChildOpts) -> Option<Workspace> {
     let mut workspace = Workspace::new(o.workspace.as_ref()?);
-    workspace = workspace.focus(o.workspace_focus);
+    workspace = workspace.change_focus(o.workspace_change_focus);
     if let Some(compositor) = o.workspace_compositor {
         workspace = workspace.compositor(compositor);
     }

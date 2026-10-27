@@ -24,7 +24,7 @@ fn workspace_defaults_off_and_is_settable() {
     let modal = Modal::new("x").workspace("2");
     let workspace = modal.workspace.as_ref().unwrap();
     assert_eq!(workspace.name(), "2");
-    assert!(workspace.focused());
+    assert!(workspace.changes_focus());
 }
 
 #[test]

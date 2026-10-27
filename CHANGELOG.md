@@ -79,10 +79,12 @@
   generic X11 (`wmctrl`); detection is automatic and can be overridden with
   `Workspace::compositor(..)`
 - `Workspace::special(..)` targets a Hyprland special workspace;
-  `Workspace::focus(false)` moves without explicitly switching workspaces
+  `Workspace::change_focus(false)` moves the window there without focusing it
+  or switching to the workspace (`Workspace::focus(false)` is an alias)
 - Placement is best-effort after the window maps; `Workspace::move_window`
   exposes the same logic for an existing window
-- CLI: `--workspace NAME`, `--workspace-silent`, `--workspace-compositor NAME`
+- CLI: `--workspace NAME`, `--workspace-no-focus` (alias
+  `--workspace-silent`), `--workspace-compositor NAME`
 
 ### Streaming options
 - `Modal::run_streaming(rx)` opens the window immediately and fills it from a
