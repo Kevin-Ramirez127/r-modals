@@ -85,6 +85,24 @@ fn child_flags_are_parsed_into_options() {
 }
 
 #[test]
+fn workspace_flags_are_parsed() {
+    let o = parse_child_opts(&args(&[
+        "--workspace",
+        "2",
+        "--workspace-silent",
+        "--workspace-compositor",
+        "hyprland",
+    ]))
+    .unwrap();
+    let workspace = child_workspace(&o).unwrap();
+    assert_eq!(workspace.name(), "2");
+    assert!(!workspace.focused());
+    assert_eq!(workspace.compositor_override(), Some(Compositor::Hyprland));
+
+    assert!(parse_child_opts(&args(&["--workspace-compositor", "nope"])).is_err());
+}
+
+#[test]
 fn positional_and_section_sources_are_parsed() {
     let o = parse_child_opts(&args(&[
         "Master password",

@@ -61,6 +61,10 @@ pub fn run_multi(modal: Modal) -> Result<Vec<ModalSelection>, ModalError> {
         v
     };
 
+    if let Some(workspace) = modal.workspace.clone() {
+        crate::workspace::spawn(workspace, std::process::id(), app_id.clone(), title.clone());
+    }
+
     let res = eframe::run_native(
         &title,
         eframe::NativeOptions {

@@ -24,6 +24,8 @@
 //! - [`ModalOption`] / [`IconSource`] — options + images.
 //! - [`SearchConfig`] + [`filter_options`] — testable filtering logic.
 //! - [`Theme`] / [`Position`] / [`Layout`] — customization.
+//! - [`Workspace`] / [`Compositor`] — open the window on a specific
+//!   workspace (Hyprland, Sway, i3, niri, KDE, generic X11).
 //! - [`ShortcutSpec`] — file-configurable key bindings ([`Modal::shortcuts_file`]).
 //! - [`PrefixSpec`] — query prefixes that run an action on confirm
 //!   ([`Modal::prefixes_file`]).
@@ -58,6 +60,7 @@ mod search;
 mod shortcut;
 mod theme;
 mod window;
+mod workspace;
 
 pub use config::ConfigFile;
 pub use confirm::Confirm;
@@ -71,3 +74,4 @@ pub use prompt::Prompt;
 pub use search::{filter_options, filter_options_with, fuzzy_score, SearchConfig};
 pub use shortcut::{default_shortcuts_path, load_shortcuts_file, parse_shortcuts, ShortcutSpec};
 pub use theme::{Layout, Position, Theme};
+pub use workspace::{Compositor, Workspace, WorkspaceError};
