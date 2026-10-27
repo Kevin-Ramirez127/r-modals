@@ -1,7 +1,7 @@
 //! [`Confirm`] — a yes/no dialog on the same borderless backend.
 
 use crate::window::{run_app, WindowSpec};
-use crate::{ModalError, Position, Theme};
+use crate::{ModalError, Position, Theme, Workspace};
 
 /// One-shot confirmation dialog.
 ///
@@ -18,6 +18,7 @@ pub struct Confirm {
     theme: Theme,
     app_id: String,
     position: Position,
+    workspace: Option<Workspace>,
     stylesheet: Option<String>,
     show_title: bool,
 }
@@ -33,6 +34,7 @@ impl Confirm {
             theme: Theme::default(),
             app_id: "r-modals".to_string(),
             position: Position::Center,
+            workspace: None,
             stylesheet: None,
             show_title: true,
         }
@@ -74,6 +76,15 @@ impl Confirm {
         self
     }
 
+    /// Open the dialog on a specific compositor workspace.
+    ///
+    /// See [`Modal::workspace`](crate::Modal::workspace) for the supported
+    /// compositors and best-effort behavior.
+    pub fn workspace(mut self, workspace: impl Into<Workspace>) -> Self {
+        self.workspace = Some(workspace.into());
+        self
+    }
+
     /// Render the title inside the borderless window. Defaults to `true`.
     ///
     /// Decorations are off, so the OS title bar is never visible; hiding the
@@ -112,7 +123,8 @@ impl Confirm {
             420.0,
             180.0,
             self.position,
-        );
+        )
+        .with_workspace(self.workspace);
         run_app(spec, move |_cc| App {
             result: inner,
             title,

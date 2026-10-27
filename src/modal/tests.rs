@@ -19,6 +19,15 @@ fn fit_width_defaults_off_and_is_settable() {
 }
 
 #[test]
+fn workspace_defaults_off_and_is_settable() {
+    assert!(Modal::new("x").workspace.is_none());
+    let modal = Modal::new("x").workspace("2");
+    let workspace = modal.workspace.as_ref().unwrap();
+    assert_eq!(workspace.name(), "2");
+    assert!(workspace.changes_focus());
+}
+
+#[test]
 fn collect_actions_walks_nested_paths() {
     let m = Modal::new("x")
         .option(ModalOption::new("a", "A").command("echo-a"))

@@ -41,7 +41,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Arc;
 
-use crate::{Confirm, Modal, ModalError, ModalOption, ModalSelection, Prompt, Theme};
+use crate::{
+    Compositor, Confirm, Modal, ModalError, ModalOption, ModalSelection, Prompt, Theme, Workspace,
+};
 
 /// What a finished dialog produced.
 #[derive(Debug, Clone)]
@@ -68,6 +70,7 @@ pub struct Dialog {
     kind: Kind,
     program: Option<PathBuf>,
     app_id: Option<String>,
+    workspace: Option<Workspace>,
     pid_file: Option<PathBuf>,
     args: Vec<OsString>,
     typed_json: bool,
@@ -89,6 +92,7 @@ impl Dialog {
             kind: Kind::Menu,
             program: None,
             app_id: None,
+            workspace: None,
             pid_file: None,
             args: Vec::new(),
             typed_json: true,
@@ -116,6 +120,7 @@ impl Dialog {
             kind,
             program: None,
             app_id: None,
+            workspace: None,
             pid_file: None,
             args: Vec::new(),
             typed_json: false,
@@ -133,6 +138,15 @@ impl Dialog {
     /// Wayland app_id / X11 class hint for the window.
     pub fn app_id(mut self, id: impl Into<String>) -> Self {
         self.app_id = Some(id.into());
+        self
+    }
+
+    /// Open the dialog on a specific compositor workspace.
+    ///
+    /// The child process receives `--workspace`, so the same best-effort
+    /// placement used by [`Modal::workspace`](crate::Modal::workspace) applies.
+    pub fn workspace(mut self, workspace: impl Into<Workspace>) -> Self {
+        self.workspace = Some(workspace.into());
         self
     }
 
@@ -321,6 +335,16 @@ impl Dialog {
         };
         if let Some(id) = &self.app_id {
             cmd.arg("--app-id").arg(id);
+        }
+        if let Some(workspace) = &self.workspace {
+            cmd.arg("--workspace").arg(workspace.name());
+            if !workspace.changes_focus() {
+                cmd.arg("--workspace-no-focus");
+            }
+            if let Some(compositor) = workspace.compositor_override() {
+                cmd.arg("--workspace-compositor")
+                    .arg(compositor.to_string());
+            }
         }
         if let Some(pid) = &self.pid_file {
             cmd.arg("--pid-file").arg(pid);
@@ -657,6 +681,9 @@ struct ChildOpts {
     no_prefixes: bool,
     config: Option<PathBuf>,
     app_id: String,
+    workspace: Option<String>,
+    workspace_change_focus: bool,
+    workspace_compositor: Option<Compositor>,
     pid_file: Option<PathBuf>,
     loading_message: Option<String>,
     min_match_chars: Option<usize>,
@@ -693,6 +720,9 @@ impl Default for ChildOpts {
             no_prefixes: false,
             config: None,
             app_id: "r-modals".to_string(),
+            workspace: None,
+            workspace_change_focus: true,
+            workspace_compositor: None,
             pid_file: None,
             loading_message: None,
             min_match_chars: None,
@@ -827,6 +857,11 @@ fn parse_child_opts(args: &[OsString]) -> Result<ChildOpts, String> {
             "--no-prefixes" => o.no_prefixes = true,
             "--config" => o.config = Some(PathBuf::from(next(&mut i)?)),
             "--app-id" => o.app_id = next(&mut i)?,
+            "--workspace" => o.workspace = Some(next(&mut i)?),
+            "--workspace-silent" | "--workspace-no-focus" => o.workspace_change_focus = false,
+            "--workspace-compositor" => {
+                o.workspace_compositor = Some(next(&mut i)?.parse::<Compositor>()?)
+            }
             "--pid-file" => o.pid_file = Some(PathBuf::from(next(&mut i)?)),
             "--password" => o.password = true,
             "--initial" => o.initial = Some(next(&mut i)?),
@@ -848,6 +883,15 @@ fn parse_child_opts(args: &[OsString]) -> Result<ChildOpts, String> {
         i += 1;
     }
     Ok(o)
+}
+
+fn child_workspace(o: &ChildOpts) -> Option<Workspace> {
+    let mut workspace = Workspace::new(o.workspace.as_ref()?);
+    workspace = workspace.change_focus(o.workspace_change_focus);
+    if let Some(compositor) = o.workspace_compositor {
+        workspace = workspace.compositor(compositor);
+    }
+    Some(workspace)
 }
 
 fn run_child_mode(mode: Mode, o: ChildOpts) -> i32 {
@@ -881,6 +925,9 @@ fn run_menu(o: ChildOpts) -> i32 {
         .fuzzy(o.fuzzy)
         .allow_custom_input(o.allow_custom)
         .app_id(o.app_id.clone());
+    if let Some(workspace) = child_workspace(&o) {
+        modal = modal.workspace(workspace);
+    }
     if let Some(css) = stylesheet {
         modal = modal.stylesheet(css);
     }
@@ -1169,6 +1216,7 @@ fn run_ask(o: ChildOpts) -> i32 {
             return 2;
         }
     };
+    let workspace = child_workspace(&o);
     let label = o
         .positional
         .clone()
@@ -1179,6 +1227,9 @@ fn run_ask(o: ChildOpts) -> i32 {
         .app_id(o.app_id)
         .password(o.password)
         .show_title(o.show_title.unwrap_or(true));
+    if let Some(workspace) = workspace {
+        prompt = prompt.workspace(workspace);
+    }
     if let Some(css) = stylesheet {
         prompt = prompt.stylesheet(css);
     }
@@ -1215,6 +1266,7 @@ fn run_confirm(o: ChildOpts) -> i32 {
             return 2;
         }
     };
+    let workspace = child_workspace(&o);
     let title = o
         .positional
         .clone()
@@ -1224,6 +1276,9 @@ fn run_confirm(o: ChildOpts) -> i32 {
         .theme(theme)
         .app_id(o.app_id)
         .show_title(o.show_title.unwrap_or(true));
+    if let Some(workspace) = workspace {
+        confirm = confirm.workspace(workspace);
+    }
     if let Some(css) = stylesheet {
         confirm = confirm.stylesheet(css);
     }
@@ -1254,6 +1309,7 @@ fn run_error(o: ChildOpts) -> i32 {
             return 2;
         }
     };
+    let workspace = child_workspace(&o);
     let title = o.title.unwrap_or_else(|| "r-modals".to_string());
     let message = o.positional.or(o.message).unwrap_or_default();
     let mut confirm = Confirm::new(title)
@@ -1263,6 +1319,9 @@ fn run_error(o: ChildOpts) -> i32 {
         .message(message)
         .confirm_label(o.confirm_label.unwrap_or_else(|| "OK".to_string()))
         .cancel_label(o.cancel_label.unwrap_or_else(|| "Close".to_string()));
+    if let Some(workspace) = workspace {
+        confirm = confirm.workspace(workspace);
+    }
     if let Some(css) = stylesheet {
         confirm = confirm.stylesheet(css);
     }

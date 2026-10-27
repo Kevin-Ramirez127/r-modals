@@ -85,6 +85,28 @@ fn child_flags_are_parsed_into_options() {
 }
 
 #[test]
+fn workspace_flags_are_parsed() {
+    let o = parse_child_opts(&args(&[
+        "--workspace",
+        "2",
+        "--workspace-no-focus",
+        "--workspace-compositor",
+        "hyprland",
+    ]))
+    .unwrap();
+    let workspace = child_workspace(&o).unwrap();
+    assert_eq!(workspace.name(), "2");
+    assert!(!workspace.changes_focus());
+    assert_eq!(workspace.compositor_override(), Some(Compositor::Hyprland));
+
+    // `--workspace-silent` is the old spelling and still works.
+    let o = parse_child_opts(&args(&["--workspace", "2", "--workspace-silent"])).unwrap();
+    assert!(!child_workspace(&o).unwrap().changes_focus());
+
+    assert!(parse_child_opts(&args(&["--workspace-compositor", "nope"])).is_err());
+}
+
+#[test]
 fn positional_and_section_sources_are_parsed() {
     let o = parse_child_opts(&args(&[
         "Master password",

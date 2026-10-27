@@ -1,6 +1,6 @@
 //! Shared viewport/eframe setup for every dialog type.
 
-use crate::{ModalError, Position, Theme};
+use crate::{ModalError, Position, Theme, Workspace};
 
 /// Everything needed to open one borderless, always-on-top window.
 pub(crate) struct WindowSpec {
@@ -10,6 +10,7 @@ pub(crate) struct WindowSpec {
     pub(crate) min_inner_size: [f32; 2],
     pub(crate) resizable: bool,
     pub(crate) position: Position,
+    pub(crate) workspace: Option<Workspace>,
 }
 
 impl WindowSpec {
@@ -22,6 +23,7 @@ impl WindowSpec {
             min_inner_size: [320.0, 200.0],
             resizable: true,
             position,
+            workspace: None,
         }
     }
 
@@ -41,7 +43,14 @@ impl WindowSpec {
             min_inner_size: [320.0, 150.0],
             resizable: false,
             position,
+            workspace: None,
         }
+    }
+
+    /// Ask the compositor to place this window on `workspace` once it maps.
+    pub(crate) fn with_workspace(mut self, workspace: Option<Workspace>) -> Self {
+        self.workspace = workspace;
+        self
     }
 
     fn viewport(&self) -> egui::ViewportBuilder {
@@ -79,6 +88,14 @@ pub(crate) fn run_app<A: eframe::App + 'static>(
         viewport: spec.viewport(),
         ..Default::default()
     };
+    if let Some(workspace) = spec.workspace.clone() {
+        crate::workspace::spawn(
+            workspace,
+            std::process::id(),
+            spec.app_id.clone(),
+            spec.title.clone(),
+        );
+    }
     eframe::run_native(
         &title,
         options,
@@ -98,6 +115,18 @@ mod tests {
         let spec = WindowSpec::modal("t".into(), &theme, "app".into(), Position::Center);
         assert_eq!(spec.inner_size, [theme.width, theme.height]);
         assert!(spec.resizable);
+    }
+
+    #[test]
+    fn workspace_is_carried_by_the_spec() {
+        let theme = Theme::dark();
+        let spec = WindowSpec::modal("t".into(), &theme, "app".into(), Position::Center);
+        assert!(spec.workspace.is_none());
+        let spec = spec.with_workspace(Some(crate::Workspace::new("2")));
+        assert_eq!(
+            spec.workspace.as_ref().map(crate::Workspace::name),
+            Some("2")
+        );
     }
 
     #[test]

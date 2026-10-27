@@ -3,7 +3,7 @@ use crate::prefix::{self, CompiledPrefix, PrefixSource, PrefixSpec};
 use crate::shortcut::{self, CompiledShortcut, ShortcutSource, ShortcutSpec, ShortcutTarget};
 use crate::{
     filter_options_with, Layout, ModalError, ModalOption, Position, SearchConfig, SelectAction,
-    Theme,
+    Theme, Workspace,
 };
 use std::sync::{Arc, Mutex};
 
@@ -64,6 +64,7 @@ pub struct Modal {
     /// Wins wherever both specify something.
     pub(crate) stylesheet_override: Option<String>,
     pub(crate) position: Position,
+    pub(crate) workspace: Option<Workspace>,
     pub(crate) initial_query: String,
     pub(crate) app_id: String,
     pub(crate) default_selected: Option<String>,
@@ -107,6 +108,7 @@ impl Modal {
             stylesheet: None,
             stylesheet_override: None,
             position: Position::Center,
+            workspace: None,
             initial_query: String::new(),
             app_id: "r-modals".to_string(),
             default_selected: None,
@@ -276,6 +278,25 @@ impl Modal {
     /// Window placement.
     pub fn position(mut self, pos: Position) -> Self {
         self.position = pos;
+        self
+    }
+
+    /// Open the window on a specific compositor workspace.
+    ///
+    /// Accepts a workspace name/number, or a [`Workspace`] for more control
+    /// (focus behavior and compositor override). Placement is best-effort and
+    /// supports Hyprland, Sway, i3, niri, KDE Plasma, and generic X11.
+    ///
+    /// ```no_run
+    /// use r_modals::Modal;
+    /// let picked = Modal::new("Pick one")
+    ///     .option(r_modals::ModalOption::new("a", "Alpha"))
+    ///     .workspace("2")
+    ///     .run()
+    ///     .unwrap();
+    /// ```
+    pub fn workspace(mut self, workspace: impl Into<Workspace>) -> Self {
+        self.workspace = Some(workspace.into());
         self
     }
 
@@ -781,7 +802,8 @@ impl Modal {
             .loading_message
             .clone()
             .unwrap_or_else(|| "Loading…".to_string());
-        let spec = crate::window::WindowSpec::modal(title, &theme, app_id, position);
+        let spec = crate::window::WindowSpec::modal(title, &theme, app_id, position)
+            .with_workspace(modal.workspace.clone());
         let res = crate::window::run_app(spec, move |cc| match options_rx {
             Some(rx) => {
                 crate::app::ModalApp::new_with_stream(cc, modal, inner, Some(rx), loading_message)

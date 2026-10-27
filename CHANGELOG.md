@@ -70,6 +70,22 @@
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
 - First-query-occurrence highlight (underline, no layout shift)
 
+### Workspace placement
+- `Modal::workspace(..)`, `Confirm::workspace(..)`, `Prompt::workspace(..)`, and
+  `Dialog::workspace(..)` open the window on a compositor workspace; the
+  builder accepts a workspace name/number or a `Workspace`
+- Supported backends: Hyprland (`hyprctl`), Sway (`swaymsg`), i3 (`i3-msg`),
+  niri (`niri msg`), KDE Plasma (`kdotool`, X11 fallback `wmctrl`), and
+  generic X11 (`wmctrl`); detection is automatic and can be overridden with
+  `Workspace::compositor(..)`
+- `Workspace::special(..)` targets a Hyprland special workspace;
+  `Workspace::change_focus(false)` moves the window there without focusing it
+  or switching to the workspace (`Workspace::focus(false)` is an alias)
+- Placement is best-effort after the window maps; `Workspace::move_window`
+  exposes the same logic for an existing window
+- CLI: `--workspace NAME`, `--workspace-no-focus` (alias
+  `--workspace-silent`), `--workspace-compositor NAME`
+
 ### Streaming options
 - `Modal::run_streaming(rx)` opens the window immediately and fills it from a
   `Receiver<Vec<ModalOption>>`; `Modal::loading_message(text)` sets the themed

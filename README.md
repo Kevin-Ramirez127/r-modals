@@ -14,6 +14,7 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
 - **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
 - **Dialogs** — `Confirm::new(..).run() -> bool`, `Prompt::new(..).run() -> Option<String>`; both render a visible title (`.show_title(false)` to hide) and accept `.stylesheet(..)`/`.position(..)`
+- **Workspaces** — `.workspace("2")` opens the window on a compositor workspace (Hyprland, Sway, i3, niri, KDE, generic X11); `.workspace(Workspace::new("code").change_focus(false))` moves it there without focusing it
 - **Spawnable dialogs** — `Dialog::menu()/ask()/confirm()/error()` start the current executable as a dialog child (`dialog_main!()`), stream typed options in, and return a typed `DialogOutput`; `--menu`, `--ask`, `--confirm`, and `--error` give shell scripts the same contract
 - **Unified config** — `ConfigFile` creates `config.toml`, appends built-ins once, migrates the old split files, and expands `{exe}` to the running executable
 - **Layouts** — `List` rows or `Grid` image tiles
@@ -141,6 +142,52 @@ Titles are rendered inside the borderless window (there is no OS title bar), so
 `.show_title(false)` to hide it, and `.stylesheet(..)`/`.position(..)` to style or
 place either dialog.
 
+## Workspace placement
+
+Ask the compositor to put the window on a specific workspace with
+`.workspace(..)`:
+
+```rust
+use r_modals::{Confirm, Modal, ModalOption, Workspace};
+
+Modal::new("Pick one")
+    .option(ModalOption::new("a", "Alpha"))
+    .workspace("2") // number or name
+    .run()
+    .unwrap();
+
+Confirm::new("Continue?")
+    .workspace(Workspace::new("code").change_focus(false))
+    .run()
+    .unwrap();
+```
+
+Placement is best-effort and happens after the window is mapped. Supported
+backends:
+
+| Compositor | Helper |
+| --- | --- |
+| Hyprland | `hyprctl` |
+| Sway | `swaymsg` |
+| i3 | `i3-msg` |
+| niri | `niri msg` |
+| KDE Plasma | `kdotool` (X11 fallback: `wmctrl`) |
+| Generic X11 | `wmctrl` |
+
+Detection is automatic; override it with
+`Workspace::compositor(Compositor::Sway)`. `Workspace::special("scratch")`
+targets a Hyprland special workspace. `.change_focus(false)` moves the window
+to the target workspace without switching to it or giving the new window
+focus (`.focus(false)` is an alias). This is best-effort: compositors without
+a silent-move primitive may still raise the window. GNOME Shell and unknown
+Wayland compositors do not expose an application-level workspace API, so the
+window stays where the compositor put it.
+
+The same builder method exists on `Confirm`, `Prompt`, and `Dialog`
+(`Dialog::menu().workspace("2")` passes `--workspace` to the child). The CLI
+accepts `--workspace NAME`, `--workspace-no-focus` (alias:
+`--workspace-silent`), and `--workspace-compositor NAME`.
+
 ## Spawning dialogs
 
 A consumer binary can reuse its own executable as the dialog backend:
@@ -249,6 +296,7 @@ cargo run --example shortcuts # file-configured keyboard shortcuts
 cargo run --example prefixes  # query prefixes that run an action on Enter
 cargo run --example gallery  # icons + List/Grid layouts + CSS themes (--grid)
 cargo run --example dialogs  # Confirm + Prompt
+cargo run --example workspace -- 2 # open on workspace 2
 cargo run --bin r-modals -- ~/Pictures/wallpapers
 ls ~/bin | cargo run --bin r-modals -- --menu --prompt "Run:"
 cargo run --bin r-modals -- --confirm "Continue?" --message "This is a demo."
