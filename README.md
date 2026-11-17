@@ -308,4 +308,4 @@ cargo run --bin r-modals -- --confirm "Continue?" --message "This is a demo."
 
 ## License
 
-GNU General Public License v3.0
+MIT
