@@ -1,3 +1,4 @@
+use crate::modal::{collect_actions_from, ActionList};
 use crate::option::find_option_path;
 use crate::prefix::{self, CompiledPrefix};
 use crate::shortcut::ShortcutTarget;
@@ -87,23 +88,58 @@ pub(crate) struct ModalApp {
     /// egui style persists across frames: applying it once avoids cloning
     /// the full `Style` and invalidating visuals 60x/sec.
     style_applied: bool,
+    /// Option actions, kept current when the list is replaced at runtime
+    /// (`run_streaming` or [`Modal::on_query_change`]).
+    actions: Arc<Mutex<ActionList>>,
+    /// Text the visible list is filtered by. Equals `query` unless an
+    /// `on_query_change` hook hides a mode prefix (e.g. `>t`).
+    filter_text: String,
+    /// Last query the hook reacted to, so it runs once per edit.
+    last_hook_query: Option<String>,
 }
 
 impl ModalApp {
+    #[cfg(test)]
     pub(crate) fn new(
         cc: &eframe::CreationContext<'_>,
         modal: Modal,
         result: Arc<Mutex<Option<ModalSelection>>>,
     ) -> Self {
-        Self::new_with_stream(cc, modal, result, None, String::new())
+        let actions = Arc::new(Mutex::new(collect_actions_from(&modal.options)));
+        Self::new_with_stream_actions(cc, modal, result, None, String::new(), actions)
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_stream(
         cc: &eframe::CreationContext<'_>,
         modal: Modal,
         result: Arc<Mutex<Option<ModalSelection>>>,
         options_rx: Option<Receiver<Vec<ModalOption>>>,
         loading_message: String,
+    ) -> Self {
+        let actions = Arc::new(Mutex::new(collect_actions_from(&modal.options)));
+        Self::new_with_stream_actions(cc, modal, result, options_rx, loading_message, actions)
+    }
+
+    /// [`Modal::run`] entry point: share the action list with the caller so
+    /// options supplied by `on_query_change` can fire their commands.
+    pub(crate) fn new_with_actions(
+        cc: &eframe::CreationContext<'_>,
+        modal: Modal,
+        result: Arc<Mutex<Option<ModalSelection>>>,
+        actions: Arc<Mutex<ActionList>>,
+    ) -> Self {
+        Self::new_with_stream_actions(cc, modal, result, None, String::new(), actions)
+    }
+
+    /// [`Modal::run_streaming`] plus live query changes.
+    pub(crate) fn new_with_stream_actions(
+        cc: &eframe::CreationContext<'_>,
+        modal: Modal,
+        result: Arc<Mutex<Option<ModalSelection>>>,
+        options_rx: Option<Receiver<Vec<ModalOption>>>,
+        loading_message: String,
+        actions: Arc<Mutex<ActionList>>,
     ) -> Self {
         let query = modal.initial_query.clone();
         let loading = options_rx.is_some() && modal.options.is_empty();
@@ -144,10 +180,16 @@ impl ModalApp {
             filter_visible: Vec::new(),
             filter_initialized: false,
             style_applied: false,
+            actions,
+            filter_text: String::new(),
+            last_hook_query: None,
         };
         // One-time per-option work so per-frame rendering never hashes image
         // bytes or (re)builds search strings.
         app.refresh_level_caches();
+        // React to `initial_query` before the first frame, so opening with
+        // `>t rust` starts directly in tab mode.
+        app.sync_live_query(&cc.egui_ctx);
         app.refresh_filter_cache();
         // Install fonts once: custom fonts become the primary family, and
         // Hack is appended so proportional hint text can draw arrow glyphs.
@@ -191,13 +233,11 @@ impl ModalApp {
             }
         }
         if let Some(options) = latest {
-            self.modal.options = options;
             self.loading = false;
-            self.nav_path.clear();
-            self.cursor = 0;
-            self.remembered_columns = None;
-            self.refresh_level_caches();
-            self.filter_initialized = false;
+            self.set_options(options);
+            // A fresh list may change what the live query should show.
+            self.last_hook_query = None;
+            self.sync_live_query(ctx);
             self.refresh_filter_cache();
             self.select_default();
         }
@@ -207,6 +247,60 @@ impl ModalApp {
             return true;
         }
         false
+    }
+
+    /// Replace the visible option list at runtime (streaming batch or a live
+    /// query mode switch). Resets navigation and cursor, and keeps the action
+    /// list current so picks from the new rows still launch.
+    fn set_options(&mut self, options: Vec<ModalOption>) {
+        self.modal.options = options;
+        self.nav_path.clear();
+        self.cursor = 0;
+        self.remembered_columns = None;
+        self.scroll_to_cursor = false;
+        self.refresh_level_caches();
+        self.filter_initialized = false;
+        if let Ok(mut actions) = self.actions.lock() {
+            *actions = collect_actions_from(&self.modal.options);
+        }
+    }
+
+    /// Run the `on_query_change` hook once per query edit and apply its
+    /// instructions: option list, filter text, placeholder, title, and hints.
+    fn sync_live_query(&mut self, ctx: &egui::Context) {
+        let Some(hook) = self.modal.query_hook.clone() else {
+            // No hook: the visible list is filtered by the raw query.
+            if self.filter_text != self.query {
+                self.filter_text = self.query.clone();
+                self.filter_initialized = false;
+            }
+            return;
+        };
+        if self.last_hook_query.as_deref() == Some(self.query.as_str()) {
+            return;
+        }
+        self.last_hook_query = Some(self.query.clone());
+        let change = hook.call(&self.query).unwrap_or_default();
+        if let Some(options) = change.options {
+            self.set_options(options);
+        }
+        if let Some(placeholder) = change.placeholder {
+            self.modal.search.placeholder = placeholder;
+        }
+        if let Some(title) = change.title.filter(|title| !title.is_empty()) {
+            if self.modal.title != title {
+                self.modal.title = title.clone();
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
+            }
+        }
+        if let Some(message) = change.empty_message {
+            self.modal.empty_message = message;
+        }
+        if let Some(hint) = change.footer_hint {
+            self.modal.footer_hint = (!hint.is_empty()).then_some(hint);
+        }
+        self.filter_text = change.filter.unwrap_or_else(|| self.query.clone());
+        self.filter_initialized = false;
     }
 
     /// Apply the theme-derived egui style once; egui keeps it across frames.
@@ -351,7 +445,7 @@ impl ModalApp {
         let max = self.modal.max_results;
         let min_match_chars = self.modal.search.min_match_chars;
         if self.filter_initialized
-            && self.filter_query == self.query
+            && self.filter_query == self.filter_text
             && self.filter_case_sensitive == case_sensitive
             && self.filter_fuzzy == fuzzy
             && self.filter_enabled == enabled
@@ -364,7 +458,7 @@ impl ModalApp {
         // `unsearchable` rows — same contract as `filter_options`.
         // (`query` is cloned first so the scan below holds no borrow of
         // `self` while writing `filter_visible`.)
-        let query = self.query.clone();
+        let query = self.filter_text.clone();
         // Navigate to the current level with shared borrows only; the
         // per-level lowered cache is index-aligned with it.
         let mut level: &[ModalOption] = &self.modal.options;
@@ -414,7 +508,7 @@ impl ModalApp {
             visible.truncate(m);
         }
         self.filter_visible = visible;
-        self.filter_query = self.query.clone();
+        self.filter_query = self.filter_text.clone();
         self.filter_case_sensitive = case_sensitive;
         self.filter_fuzzy = fuzzy;
         self.filter_enabled = enabled;
@@ -432,7 +526,9 @@ impl ModalApp {
     /// and an already-complete label produce no completion, so Tab keeps its
     /// prefix-completion meaning and never clears an untouched field.
     fn focused_item_label(&mut self) -> Option<String> {
-        if self.query.trim().is_empty() {
+        // A live query mode may filter by a prefix-stripped remainder; Tab
+        // must not overwrite the mode prefix with the focused row's label.
+        if self.query.trim().is_empty() || self.filter_text != self.query {
             return None;
         }
         let visible = self.visible_indices();
@@ -442,9 +538,11 @@ impl ModalApp {
     }
 
     /// Whether the empty-state message applies. An untouched (empty or
-    /// whitespace-only) search field must stay blank.
+    /// whitespace-only) search field must stay blank. Uses the filter text so
+    /// a bare mode prefix (e.g. `>t`) does not claim "No matches" when the
+    /// mode legitimately lists everything.
     fn shows_empty_message(&self) -> bool {
-        !self.query.trim().is_empty()
+        !self.filter_text.trim().is_empty()
     }
 
     fn activate(&self, visible: &[usize], pos: usize) -> Option<RowAction> {
@@ -703,7 +801,7 @@ impl ModalApp {
         let icon_keys = &self.level_icon_keys;
         let cursor = &mut self.cursor;
         let scroll_to_cursor = self.scroll_to_cursor;
-        let query = self.query.clone();
+        let query = self.filter_text.clone();
         // Owned copy for building selection paths inside the layout closure.
         let nav_snapshot = self.nav_path.clone();
         let tile_radius = t.effective_tile_radius();
@@ -893,7 +991,7 @@ impl ModalApp {
         let icon_keys = &self.level_icon_keys;
         let cursor = &mut self.cursor;
         let scroll_to_cursor = self.scroll_to_cursor;
-        let query = self.query.clone();
+        let query = self.filter_text.clone();
         // Owned copy for building selection paths inside the layout closure.
         let nav_snapshot = self.nav_path.clone();
         let mut action: Option<RowAction> = None;
@@ -1148,6 +1246,10 @@ impl eframe::App for ModalApp {
             return;
         }
 
+        // React to the current query before keys/auth actions use the list, so
+        // a live mode switch (`>t`/`>h`) is visible to shortcuts and Enter.
+        self.sync_live_query(ctx);
+
         // File-configured shortcuts win over the built-in keys so a user can
         // rebind them (e.g. make `Enter` do something else). Checked first.
         if self.fire_shortcut(ctx) {
@@ -1239,6 +1341,10 @@ impl eframe::App for ModalApp {
         {
             self.exit_level();
         }
+
+        // Programmatic edits above (Ctrl+U, Tab completion, submenu exit)
+        // changed the query without the hook seeing them yet.
+        self.sync_live_query(ctx);
 
         // Single filtered-list computation per frame: the cache refreshes
         // only when the query/config changed, and this clone is the only
@@ -1432,6 +1538,9 @@ impl eframe::App for ModalApp {
                 }
                 if resp.changed() {
                     self.cursor = 0;
+                    // Apply a live mode switch in the same frame, so the list
+                    // below never shows the previous mode's rows.
+                    self.sync_live_query(ui.ctx());
                 }
                 // Tab replaced the buffer text before this field was drawn, so
                 // move the editing cursor to the end of the completed prefix.

@@ -29,6 +29,8 @@
 //! - [`ShortcutSpec`] — file-configurable key bindings ([`Modal::shortcuts_file`]).
 //! - [`PrefixSpec`] — query prefixes that run an action on confirm
 //!   ([`Modal::prefixes_file`]).
+//! - [`QueryChange`] — live query reactions that swap options or the filter
+//!   while the user types ([`Modal::on_query_change`]).
 //! - [`Confirm`] / [`Prompt`] — one-shot dialogs built on the same backend.
 //! - [`Dialog`] / [`DialogSession`] / [`DialogOutput`] — spawn the consumer's
 //!   own binary in `--menu`/`--ask`/`--confirm`/`--error` mode; call
@@ -56,6 +58,7 @@ mod multi;
 mod option;
 mod prefix;
 mod prompt;
+mod query;
 mod search;
 mod shortcut;
 mod theme;
@@ -71,6 +74,7 @@ pub use multi::{run_multi, MultiSelection};
 pub use option::{ErrorAction, IconSource, ModalOption, SelectAction};
 pub use prefix::{default_prefixes_path, load_prefixes_file, parse_prefixes, PrefixSpec};
 pub use prompt::Prompt;
+pub use query::QueryChange;
 pub use search::{filter_options, filter_options_with, fuzzy_score, SearchConfig};
 pub use shortcut::{default_shortcuts_path, load_shortcuts_file, parse_shortcuts, ShortcutSpec};
 pub use theme::{Layout, Position, Theme};

@@ -91,6 +91,9 @@ pub struct Modal {
     /// Load [`crate::default_prefixes_path`] when present and no explicit
     /// source was given. Defaults to `true`.
     pub(crate) auto_prefixes: bool,
+    /// Live reaction to search-field edits, installed by
+    /// [`Modal::on_query_change`].
+    pub(crate) query_hook: Option<crate::query::QueryHook>,
 }
 
 impl Modal {
@@ -125,6 +128,7 @@ impl Modal {
             prefix_sources: Vec::new(),
             compiled_prefixes: Vec::new(),
             auto_prefixes: true,
+            query_hook: None,
         }
     }
 
@@ -192,6 +196,49 @@ impl Modal {
     /// Pre-fill the search field.
     pub fn initial_query(mut self, q: impl Into<String>) -> Self {
         self.initial_query = q.into();
+        self
+    }
+
+    /// React to search-field edits while the modal is open.
+    ///
+    /// The closure runs once on open (with [`Modal::initial_query`]) and again
+    /// whenever the query text changes. It returns a [`crate::QueryChange`]
+    /// describing what to do for that query — typically swap `options` and set
+    /// the text to `filter` by:
+    ///
+    /// ```no_run
+    /// use r_modals::{Modal, ModalOption, QueryChange};
+    ///
+    /// let tabs = vec![ModalOption::new("https://example.com", "Example")];
+    /// Modal::new("Launcher")
+    ///     .option(ModalOption::new("ff", "Firefox"))
+    ///     .on_query_change(move |query| {
+    ///         let Some(rest) = query.strip_prefix(">t") else {
+    ///             return None; // no changes: filter by the raw query
+    ///         };
+    ///         Some(
+    ///             QueryChange::new()
+    ///                 .options(tabs.clone())
+    ///                 .filter(rest.trim())
+    ///                 .placeholder("Search open tabs…")
+    ///                 .title("Open tabs"),
+    ///         )
+    ///     })
+    ///     .run();
+    /// ```
+    ///
+    /// Returning `None` keeps the current list and filters by the raw query.
+    /// A `>t` prefix stays visible in the field while `filter` limits the
+    /// rows to the text after it; deleting the prefix switches back as soon
+    /// as the hook returns the original options again.
+    ///
+    /// Actions on options introduced by the hook fire on pick, just like
+    /// options supplied before the window opened.
+    pub fn on_query_change<F>(mut self, hook: F) -> Self
+    where
+        F: FnMut(&str) -> Option<crate::QueryChange> + Send + 'static,
+    {
+        self.query_hook = Some(crate::query::QueryHook::new(hook));
         self
     }
 
@@ -698,30 +745,9 @@ impl Modal {
     /// Collect `(index-path, action, on_error)` for every option with an
     /// action, so [`Modal::run`] can fire the pick's action after the modal
     /// is gone (the modal itself is moved into the GUI closure).
-    fn collect_actions(
-        &self,
-    ) -> Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)> {
-        fn walk(
-            prefix: &mut Vec<usize>,
-            opts: &[ModalOption],
-            out: &mut Vec<(Vec<usize>, crate::SelectAction, Option<crate::ErrorAction>)>,
-        ) {
-            for (i, o) in opts.iter().enumerate() {
-                if let Some(a) = &o.action {
-                    prefix.push(i);
-                    out.push((prefix.clone(), a.clone(), o.on_error.clone()));
-                    prefix.pop();
-                }
-                if !o.children.is_empty() {
-                    prefix.push(i);
-                    walk(prefix, &o.children, out);
-                    prefix.pop();
-                }
-            }
-        }
-        let mut out = Vec::new();
-        walk(&mut Vec::new(), &self.options, &mut out);
-        out
+    #[cfg(test)]
+    fn collect_actions(&self) -> ActionList {
+        collect_actions_from(&self.options)
     }
 
     /// Fire the pick's action, or its `on_error` fallback when the spawn
@@ -778,8 +804,10 @@ impl Modal {
         if self.options.is_empty() && options_rx.is_none() {
             return Err(ModalError::NoOptions);
         }
-        // Actions are cloned out first: `self` moves into the GUI closure.
-        let actions = self.collect_actions();
+        // Actions are collected first: `self` moves into the GUI closure.
+        // The app keeps the list current when `on_query_change` swaps options,
+        // so dynamically supplied rows still fire their commands.
+        let actions = Arc::new(Mutex::new(collect_actions_from(&self.options)));
         let mut modal = self;
         modal.apply_history();
         if options_rx.is_some() {
@@ -804,13 +832,20 @@ impl Modal {
             .unwrap_or_else(|| "Loading…".to_string());
         let spec = crate::window::WindowSpec::modal(title, &theme, app_id, position)
             .with_workspace(modal.workspace.clone());
+        let app_actions = actions.clone();
         let res = crate::window::run_app(spec, move |cc| match options_rx {
-            Some(rx) => {
-                crate::app::ModalApp::new_with_stream(cc, modal, inner, Some(rx), loading_message)
-            }
-            None => crate::app::ModalApp::new(cc, modal, inner),
+            Some(rx) => crate::app::ModalApp::new_with_stream_actions(
+                cc,
+                modal,
+                inner,
+                Some(rx),
+                loading_message,
+                app_actions,
+            ),
+            None => crate::app::ModalApp::new_with_actions(cc, modal, inner, app_actions),
         });
         res?;
+        let actions = actions.lock().map(|a| a.clone()).unwrap_or_default();
         let picked: Option<ModalSelection> = shared.lock().map(|g| g.clone()).unwrap_or(None);
         if let Some(ref sel) = picked {
             if let Some(path) = &history_file {
@@ -842,6 +877,35 @@ impl Modal {
     ) {
         std::thread::spawn(move || callback(self.run()));
     }
+}
+
+/// One option action with the index path that reaches it.
+pub(crate) type ActionList = Vec<(Vec<usize>, SelectAction, Option<crate::ErrorAction>)>;
+
+/// Collect every option action (and error fallback) in `options`, keyed by
+/// the index path that reaches it.
+///
+/// Shared between the initial list and lists introduced later by
+/// [`Modal::on_query_change`] / [`Modal::run_streaming`], so a pick from a
+/// dynamically supplied option still fires its command.
+pub(crate) fn collect_actions_from(options: &[ModalOption]) -> ActionList {
+    fn walk(prefix: &mut Vec<usize>, opts: &[ModalOption], out: &mut ActionList) {
+        for (i, o) in opts.iter().enumerate() {
+            if let Some(a) = &o.action {
+                prefix.push(i);
+                out.push((prefix.clone(), a.clone(), o.on_error.clone()));
+                prefix.pop();
+            }
+            if !o.children.is_empty() {
+                prefix.push(i);
+                walk(prefix, &o.children, out);
+                prefix.pop();
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(&mut Vec::new(), options, &mut out);
+    out
 }
 
 #[cfg(test)]

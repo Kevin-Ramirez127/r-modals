@@ -65,6 +65,11 @@
   `ModalOption::keywords`/`keyword` (matched in both search modes)
 - `Modal::default_selected`, `Modal::allow_custom_input` (command-palette free text),
   `Modal::empty_message`, `Modal::footer_hint`, `Modal::max_results`
+- `Modal::on_query_change` + `QueryChange`: react to search-field edits while the
+  window is open — swap the option list (mode switching), filter by prefix-stripped
+  text, and update the placeholder, title, empty message, and footer hint
+- Actions on options introduced at runtime (via `on_query_change` or
+  `run_streaming`) now fire on pick, not just actions on the initial list
 - Hint arrows (`↵` run, `⇥` complete) now fall back to egui's bundled Hack
   font instead of rendering as tofu boxes
 - Extended keys: `Home`/`End`, `PgUp`/`PgDn`, `Ctrl+N`/`Ctrl+P`, `Ctrl+U` clears query
