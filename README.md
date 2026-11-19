@@ -10,6 +10,7 @@ Instant modals for Rust — one call pops a centered, borderless, searchable opt
 - **Actions** — run a command, shell one-liner, or Rust closure on select
 - **Shortcuts** — bind keys to an option id or a terminal command/shell from a TOML file (`Modal::shortcuts_file`, `Modal::shortcuts_toml`, `Modal::shortcut`); bound keys are consumed before the built-in ones and show up as row hints
 - **Prefixes** — bind the start of the query to an action from a TOML file (`Modal::prefixes_file`, `Modal::prefixes_toml`, `Modal::prefix`); type the prefix and press Enter to run its command/shell with the rest of the query, or pass a parameter explicitly with `>search=Hello World`. While typing, the closest matching prefix is hinted and `Tab` completes it; with no prefix to complete, `Tab` completes the focused row's label
+- **Live query changes** — `Modal::on_query_change(..)` reacts as the user types: swap the option list, choose the text to filter by, and update the placeholder/title/hints without reopening the window (e.g. `>t` searches open browser tabs, deleting it returns to apps)
 - **Search** — substring or fuzzy (`Modal::fuzzy(true)`, ranked best-first) over label, id, description, and keywords, with case-sensitivity option
 - **Option states** — `.disabled(true)`, `ModalOption::separator(..)`, `.shortcut("Ctrl+O")`, `.keyword(..)`
 - **Picker extras** — `.default_selected(..)`, `.allow_custom_input(true)` (free text), `.empty_message(..)`, `.footer_hint(..)`, `.max_results(n)`, `.min_match_chars(n)` (hide the full list until the query is long enough), `.multi_select(true)` + `run_multi()`, `.history_file(..)` MRU sorting, `.font(..)` custom fonts
@@ -127,6 +128,59 @@ exact prefix, `Tab` extends it). When the query does not start a partial prefix,
 > `command` + `args = ["{query}"]` there; it is argv-based and equally safe on
 > Unix. Auto-loaded config files that are group/world-writable are ignored.
 > See [`SECURITY.md`](SECURITY.md) for the full threat model.
+
+## Live query changes
+
+`Modal::on_query_change` installs a closure that runs once when the modal
+opens and again whenever the search text changes. Return a `QueryChange` to
+swap the option list, filter by text other than the raw query, or update the
+placeholder, title, empty message and footer hint — all while the window
+stays open. Returning `None` keeps the current list and filters by the raw
+query.
+
+```rust
+use r_modals::{Modal, ModalOption, QueryChange};
+
+let apps = vec![ModalOption::new("ff", "Firefox")];
+let tabs = vec![ModalOption::new("https://example.com", "Example")];
+let mut mode = "apps";
+let apps_for_hook = apps.clone();
+
+Modal::new("Launcher")
+    .options(apps)
+    .on_query_change(move |query| {
+        let next = if query.starts_with(">t") { "tabs" } else { "apps" };
+        let switched = next != mode;
+        mode = next;
+        let mut change = QueryChange::new();
+        if switched {
+            change = change.options(if next == "tabs" {
+                tabs.clone()
+            } else {
+                apps_for_hook.clone()
+            });
+        }
+        let filter = if next == "tabs" {
+            query.strip_prefix(">t").unwrap_or_default()
+        } else {
+            query
+        };
+        Some(
+            change
+                .filter(filter.trim_start())
+                .placeholder(if next == "tabs" { "Search tabs…" } else { "Search apps…" })
+                .title(if next == "tabs" { "Open tabs" } else { "Applications" }),
+        )
+    })
+    .run()
+    .unwrap();
+```
+
+Only return `options` when the mode actually changes: replacing the list
+resets the cursor and the current submenu level. Actions (`.command`,
+`.shell`, `.on_select`) attached to hook-supplied options fire on pick just
+like options supplied before the window opened. The same is true for options
+delivered later by `run_streaming`.
 
 ## Dialogs
 
