@@ -57,6 +57,16 @@ pub struct QueryChange {
     pub empty_message: Option<String>,
     /// Replace the bottom hint line. An empty string clears it.
     pub footer_hint: Option<String>,
+    /// Show an in-place loading state in the option area.
+    ///
+    /// While set, the picker keeps the search field editable but replaces the
+    /// rows with a centered spinner and message. The hook is then called again
+    /// about 20 times per second, giving it a chance to finish the work it
+    /// started and return the options; supplying options clears the state.
+    pub loading: Option<bool>,
+    /// Message shown by the in-place loading state. Unset keeps the current
+    /// text (the modal-level `loading_message`, or "Loading…").
+    pub loading_message: Option<String>,
 }
 
 impl QueryChange {
@@ -98,6 +108,38 @@ impl QueryChange {
     /// Replace the bottom hint line.
     pub fn footer_hint(mut self, hint: impl Into<String>) -> Self {
         self.footer_hint = Some(hint.into());
+        self
+    }
+
+    /// Show (or stop showing) the in-place loading state.
+    ///
+    /// While set, the picker keeps the search field editable but replaces the
+    /// rows with a centered spinner and message. The hook is then called again
+    /// about 20 times per second, giving it a chance to finish the work it
+    /// started and return the options; supplying options clears the state.
+    ///
+    /// ```no_run
+    /// use r_modals::{Modal, ModalOption, QueryChange};
+    ///
+    /// let modal = Modal::new("Launcher")
+    ///     .options(vec![ModalOption::new("a", "App")])
+    ///     .on_query_change(|query| {
+    ///         query.starts_with(">t").then(|| {
+    ///             QueryChange::new()
+    ///                 .filter("")
+    ///                 .loading(true)
+    ///                 .loading_message("Loading open tabs…")
+    ///         })
+    ///     });
+    /// ```
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = Some(loading);
+        self
+    }
+
+    /// Set the message shown by the in-place loading state.
+    pub fn loading_message(mut self, message: impl Into<String>) -> Self {
+        self.loading_message = Some(message.into());
         self
     }
 }
@@ -144,13 +186,17 @@ mod tests {
             .placeholder("Search…")
             .title("Tabs")
             .empty_message("Nothing")
-            .footer_hint("Enter");
+            .footer_hint("Enter")
+            .loading(true)
+            .loading_message("Loading…");
         assert_eq!(change.options.as_ref().map(Vec::len), Some(1));
         assert_eq!(change.filter.as_deref(), Some("a"));
         assert_eq!(change.placeholder.as_deref(), Some("Search…"));
         assert_eq!(change.title.as_deref(), Some("Tabs"));
         assert_eq!(change.empty_message.as_deref(), Some("Nothing"));
         assert_eq!(change.footer_hint.as_deref(), Some("Enter"));
+        assert_eq!(change.loading, Some(true));
+        assert_eq!(change.loading_message.as_deref(), Some("Loading…"));
     }
 
     #[test]

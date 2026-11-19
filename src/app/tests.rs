@@ -1112,6 +1112,101 @@ fn streaming_disconnect_while_loading_cancels() {
     assert!(!app.loading);
 }
 
+/// A hook can ask for an in-place loading state: the old rows disappear
+/// (so they cannot be picked), the hook is polled again even though the
+/// query did not change, and the options it eventually returns end loading.
+#[test]
+fn hook_loading_state_polls_until_options_arrive() {
+    use crate::QueryChange;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let flag = ready.clone();
+    let count = calls.clone();
+    let modal = crate::Modal::new("Launcher")
+        .options(vec![crate::ModalOption::new("app", "App")])
+        .on_query_change(move |query| {
+            if !query.starts_with(">t") {
+                return None;
+            }
+            count.fetch_add(1, Ordering::SeqCst);
+            let change = QueryChange::new()
+                .filter("")
+                .loading_message("Loading open tabs…");
+            if flag.load(Ordering::SeqCst) {
+                Some(
+                    change
+                        .options(vec![crate::ModalOption::new("tab", "Tab")])
+                        .loading(false),
+                )
+            } else {
+                Some(change.loading(true))
+            }
+        });
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result);
+    app.query = ">t".to_string();
+    app.sync_live_query(&ctx);
+
+    assert!(app.inline_loading);
+    assert!(
+        app.visible_indices().is_empty(),
+        "hidden rows are unpickable"
+    );
+    assert_eq!(app.modal.options[0].id, "app");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // No query edit, but loading means the hook runs again.
+    app.sync_live_query(&ctx);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(app.inline_loading);
+
+    ready.store(true, Ordering::SeqCst);
+    app.sync_live_query(&ctx);
+    assert!(!app.inline_loading);
+    assert_eq!(app.modal.options[0].id, "tab");
+    assert_eq!(app.filter_visible, vec![0]);
+
+    // Once loaded and idle, the hook stops being polled for an unchanged query.
+    let after = calls.load(Ordering::SeqCst);
+    app.sync_live_query(&ctx);
+    assert_eq!(calls.load(Ordering::SeqCst), after);
+}
+
+/// Enter must not activate a row hidden behind the inline loading state.
+#[test]
+fn enter_is_ignored_while_inline_loading() {
+    use crate::QueryChange;
+    use eframe::App as _;
+    let modal = crate::Modal::new("Launcher")
+        .options(vec![crate::ModalOption::new("app", "App")])
+        .on_query_change(|query| {
+            query.starts_with(">t").then(|| {
+                QueryChange::new()
+                    .filter("")
+                    .loading(true)
+                    .loading_message("Loading open tabs…")
+            })
+        });
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result.clone());
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    type_text(&ctx, &mut app, &mut frame, &mut t, ">t");
+    assert!(app.inline_loading);
+    type_key(&ctx, &mut app, &mut frame, &mut t, egui::Key::Enter);
+    assert!(result.lock().unwrap().is_none(), "nothing may be picked");
+}
+
 #[test]
 fn empty_search_field_hides_the_empty_message() {
     let (ctx, mut app, _) = grid_app(0, true);

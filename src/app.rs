@@ -26,6 +26,10 @@ pub(crate) struct ModalApp {
     options_rx: Option<Receiver<Vec<ModalOption>>>,
     /// True until the first streaming options batch arrives.
     loading: bool,
+    /// In-place loading state requested by the query hook
+    /// ([`QueryChange::loading`]): the search field stays editable while the
+    /// option area shows a spinner.
+    inline_loading: bool,
     /// Shown while `loading` is true.
     loading_message: String,
     query: String,
@@ -147,6 +151,7 @@ impl ModalApp {
             modal,
             options_rx,
             loading,
+            inline_loading: false,
             loading_message: if loading_message.is_empty() {
                 "Loading…".to_string()
             } else {
@@ -234,6 +239,7 @@ impl ModalApp {
         }
         if let Some(options) = latest {
             self.loading = false;
+            self.inline_loading = false;
             self.set_options(options);
             // A fresh list may change what the live query should show.
             self.last_hook_query = None;
@@ -276,13 +282,26 @@ impl ModalApp {
             }
             return;
         };
-        if self.last_hook_query.as_deref() == Some(self.query.as_str()) {
+        if self.last_hook_query.as_deref() == Some(self.query.as_str()) && !self.inline_loading {
             return;
         }
         self.last_hook_query = Some(self.query.clone());
         let change = hook.call(&self.query).unwrap_or_default();
+        if let Some(message) = change.loading_message {
+            self.modal.loading_message = Some(message.clone());
+            self.loading_message = message;
+        }
         if let Some(options) = change.options {
             self.set_options(options);
+            // A supplied list is the result of the pending work; stop the
+            // in-place loading state unless the hook asked to keep it (for
+            // example while streaming rows in batches).
+            if change.loading != Some(true) {
+                self.inline_loading = false;
+            }
+        }
+        if let Some(loading) = change.loading {
+            self.inline_loading = loading;
         }
         if let Some(placeholder) = change.placeholder {
             self.modal.search.placeholder = placeholder;
@@ -301,6 +320,11 @@ impl ModalApp {
         }
         self.filter_text = change.filter.unwrap_or_else(|| self.query.clone());
         self.filter_initialized = false;
+        if self.inline_loading {
+            // The hook cannot wake the GUI itself, so poll it until it has
+            // the options ready.
+            ctx.request_repaint_after(Duration::from_millis(50));
+        }
     }
 
     /// Apply the theme-derived egui style once; egui keeps it across frames.
@@ -348,6 +372,24 @@ impl ModalApp {
         });
         // Keep polling the channel: the producer cannot wake egui itself.
         ctx.request_repaint_after(Duration::from_millis(50));
+    }
+
+    /// In-place loading state requested by the query hook: the search field
+    /// remains editable and the option area shows a centered spinner.
+    fn show_inline_loading(&self, ui: &mut egui::Ui, t: &crate::Theme) {
+        ui.vertical_centered(|ui| {
+            ui.add_space((ui.available_height() * 0.25).max(6.0));
+            ui.add(
+                egui::Spinner::new()
+                    .size(t.font_size * 1.5)
+                    .color(t.dim_text),
+            );
+            ui.add_space(8.0);
+            ui.colored_label(
+                t.dim_text,
+                self.modal.loading_message.as_deref().unwrap_or("Loading…"),
+            );
+        });
     }
 
     /// Options of the currently shown level (root when `nav_path` is empty).
@@ -518,6 +560,12 @@ impl ModalApp {
     }
 
     fn visible_indices(&mut self) -> Vec<usize> {
+        // While a load is pending the rows are replaced by the spinner, so
+        // nothing must be visible to Enter/navigation (a stale hidden row
+        // must never be picked).
+        if self.inline_loading {
+            return Vec::new();
+        }
         self.refresh_filter_cache();
         self.filter_visible.clone()
     }
@@ -1252,7 +1300,7 @@ impl eframe::App for ModalApp {
 
         // File-configured shortcuts win over the built-in keys so a user can
         // rebind them (e.g. make `Enter` do something else). Checked first.
-        if self.fire_shortcut(ctx) {
+        if !self.inline_loading && self.fire_shortcut(ctx) {
             self.scroll_to_cursor = false;
             return;
         }
@@ -1422,7 +1470,7 @@ impl eframe::App for ModalApp {
             };
             self.scroll_to_cursor = self.modal.center_on_navigate;
         }
-        if enter {
+        if enter && !self.inline_loading {
             // A registered prefix confirmed with Enter runs its action and
             // closes with no pick — this wins over option activation.
             if let Some((cp, rest)) =
@@ -1585,7 +1633,9 @@ impl eframe::App for ModalApp {
             // edit `query` this frame; refresh so the list never lags one
             // frame behind typing.
             let visible = self.visible_indices();
-            if visible.is_empty() {
+            if self.inline_loading {
+                self.show_inline_loading(ui, &t);
+            } else if visible.is_empty() {
                 // An empty query is the "nothing filtered yet" state (e.g. a
                 // hidden list or a loading modal), not a failed search: stay
                 // blank instead of claiming "No matches".
