@@ -1112,16 +1112,109 @@ fn streaming_disconnect_while_loading_cancels() {
     assert!(!app.loading);
 }
 
+/// A hook can ask for an in-place loading state: the old rows disappear
+/// (so they cannot be picked), the hook is polled again even though the
+/// query did not change, and the options it eventually returns end loading.
+#[test]
+fn hook_loading_state_polls_until_options_arrive() {
+    use crate::QueryChange;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let ready = Arc::new(AtomicBool::new(false));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let flag = ready.clone();
+    let count = calls.clone();
+    let modal = crate::Modal::new("Launcher")
+        .options(vec![crate::ModalOption::new("app", "App")])
+        .on_query_change(move |query| {
+            if !query.starts_with(">t") {
+                return None;
+            }
+            count.fetch_add(1, Ordering::SeqCst);
+            let change = QueryChange::new()
+                .filter("")
+                .loading_message("Loading open tabs…");
+            if flag.load(Ordering::SeqCst) {
+                Some(
+                    change
+                        .options(vec![crate::ModalOption::new("tab", "Tab")])
+                        .loading(false),
+                )
+            } else {
+                Some(change.loading(true))
+            }
+        });
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result);
+    app.query = ">t".to_string();
+    app.sync_live_query(&ctx);
+
+    assert!(app.inline_loading);
+    assert!(
+        app.visible_indices().is_empty(),
+        "hidden rows are unpickable"
+    );
+    assert_eq!(app.modal.options[0].id, "app");
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    // No query edit, but loading means the hook runs again.
+    app.sync_live_query(&ctx);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert!(app.inline_loading);
+
+    ready.store(true, Ordering::SeqCst);
+    app.sync_live_query(&ctx);
+    assert!(!app.inline_loading);
+    assert_eq!(app.modal.options[0].id, "tab");
+    assert_eq!(app.filter_visible, vec![0]);
+
+    // Once loaded and idle, the hook stops being polled for an unchanged query.
+    let after = calls.load(Ordering::SeqCst);
+    app.sync_live_query(&ctx);
+    assert_eq!(calls.load(Ordering::SeqCst), after);
+}
+
+/// Enter must not activate a row hidden behind the inline loading state.
+#[test]
+fn enter_is_ignored_while_inline_loading() {
+    use crate::QueryChange;
+    use eframe::App as _;
+    let modal = crate::Modal::new("Launcher")
+        .options(vec![crate::ModalOption::new("app", "App")])
+        .on_query_change(|query| {
+            query.starts_with(">t").then(|| {
+                QueryChange::new()
+                    .filter("")
+                    .loading(true)
+                    .loading_message("Loading open tabs…")
+            })
+        });
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new(&cc, modal, result.clone());
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    type_text(&ctx, &mut app, &mut frame, &mut t, ">t");
+    assert!(app.inline_loading);
+    type_key(&ctx, &mut app, &mut frame, &mut t, egui::Key::Enter);
+    assert!(result.lock().unwrap().is_none(), "nothing may be picked");
+}
+
 #[test]
 fn empty_search_field_hides_the_empty_message() {
-    let (_, mut app, _) = grid_app(0, true);
-    app.query.clear();
-    assert!(!app.shows_empty_message());
-    app.query = "   ".to_string();
-    assert!(!app.shows_empty_message());
-
-    app.query = "ab".to_string();
-    assert!(app.shows_empty_message());
+    let (ctx, mut app, _) = grid_app(0, true);
+    for (query, expected) in [("", false), ("   ", false), ("ab", true)] {
+        app.query = query.to_string();
+        app.sync_live_query(&ctx);
+        assert_eq!(app.shows_empty_message(), expected, "query {query:?}");
+    }
 }
 
 /// With no partial prefix, Tab completes the focused row's label.
@@ -1236,4 +1329,193 @@ fn arrow_keys_move_the_caret_in_a_non_empty_search() {
     let _ = ctx.run(inp, |ctx| app.update(ctx, &mut frame));
     let state = egui::TextEdit::load_state(&ctx, app.search_id).expect("text edit state");
     assert_eq!(state.cursor.char_range().expect("range").primary.index, 0);
+}
+
+/// App whose options switch on a `>t` / `>h` query prefix, like a launcher
+/// that searches browser tabs and history in the same picker.
+fn live_query_app(
+    initial_query: &str,
+) -> (
+    egui::Context,
+    ModalApp,
+    eframe::Frame,
+    Arc<Mutex<Option<ModalSelection>>>,
+) {
+    use crate::QueryChange;
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let apps = vec![
+        crate::ModalOption::new("app.github", "GitHub Desktop"),
+        crate::ModalOption::new("app.git", "Git"),
+    ];
+    let tabs = vec![
+        crate::ModalOption::new("https://rust-lang.org", "Rust"),
+        crate::ModalOption::new("https://docs.rs", "docs.rs"),
+    ];
+    let history = vec![crate::ModalOption::new("https://example.com", "Example")];
+    let mut state = "apps";
+    let apps_for_hook = apps.clone();
+    let modal = crate::Modal::new("Launcher")
+        .options(apps)
+        .initial_query(initial_query)
+        .on_query_change(move |query| {
+            let next = if query.starts_with(">t") {
+                "tabs"
+            } else if query.starts_with(">h") {
+                "history"
+            } else {
+                "apps"
+            };
+            let switched = next != state;
+            state = next;
+            let mut change = QueryChange::new();
+            if switched {
+                change = change.options(match next {
+                    "tabs" => tabs.clone(),
+                    "history" => history.clone(),
+                    _ => apps_for_hook.clone(),
+                });
+            }
+            let filter = match next {
+                "tabs" => query.strip_prefix(">t"),
+                "history" => query.strip_prefix(">h"),
+                _ => Some(query),
+            };
+            Some(change.filter(filter.unwrap_or_default().trim_start()))
+        });
+    let result = Arc::new(Mutex::new(None));
+    let app = ModalApp::new(&cc, modal, result.clone());
+    let frame = eframe::Frame::_new_kittest();
+    (ctx, app, frame, result)
+}
+
+fn type_text(
+    ctx: &egui::Context,
+    app: &mut ModalApp,
+    frame: &mut eframe::Frame,
+    t: &mut f64,
+    text: &str,
+) {
+    use eframe::App as _;
+    *t += 1.0 / 60.0;
+    let mut inp = headless_input(*t);
+    inp.events.push(egui::Event::Text(text.to_string()));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, frame));
+}
+
+fn type_key(
+    ctx: &egui::Context,
+    app: &mut ModalApp,
+    frame: &mut eframe::Frame,
+    t: &mut f64,
+    key: egui::Key,
+) {
+    use eframe::App as _;
+    *t += 1.0 / 60.0;
+    let mut inp = headless_input(*t);
+    inp.events.push(key_event(key));
+    let _ = ctx.run(inp, |ctx| app.update(ctx, frame));
+}
+
+/// Typing `>t` swaps the list to tabs and filters by the text after the
+/// prefix; deleting the prefix restores the original app list.
+#[test]
+fn live_prefix_switches_to_tabs_and_back() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, _result) = live_query_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    assert_eq!(app.modal.options[0].id, "app.github");
+
+    type_text(&ctx, &mut app, &mut frame, &mut t, ">t");
+    assert_eq!(app.query, ">t");
+    assert_eq!(app.filter_text, "");
+    assert_eq!(app.modal.options[0].id, "https://rust-lang.org");
+    assert_eq!(app.modal.options.len(), 2);
+    assert_eq!(app.filter_visible, vec![0, 1], "bare prefix lists all tabs");
+
+    type_text(&ctx, &mut app, &mut frame, &mut t, " docs");
+    assert_eq!(app.query, ">t docs");
+    assert_eq!(app.filter_text, "docs");
+    assert_eq!(app.filter_visible, vec![1], "prefix is not filtered on");
+
+    for _ in 0.." docs".len() {
+        type_key(&ctx, &mut app, &mut frame, &mut t, egui::Key::Backspace);
+    }
+    assert_eq!(app.query, ">t");
+    for _ in 0..2 {
+        type_key(&ctx, &mut app, &mut frame, &mut t, egui::Key::Backspace);
+    }
+    assert_eq!(app.query, "");
+    assert_eq!(app.filter_text, "");
+    assert_eq!(app.modal.options[0].id, "app.github");
+    assert_eq!(app.filter_visible, vec![0, 1]);
+}
+
+/// An `initial_query` already carrying the mode prefix starts in that mode.
+#[test]
+fn live_prefix_applies_to_initial_query() {
+    let (_ctx, app, _frame, _result) = live_query_app(">h");
+    assert_eq!(app.query, ">h");
+    assert_eq!(app.filter_text, "");
+    assert_eq!(app.modal.options[0].id, "https://example.com");
+}
+
+/// Enter picks a row from the dynamically supplied list and returns its id.
+#[test]
+fn live_prefix_selection_returns_dynamic_option() {
+    use eframe::App as _;
+    let (ctx, mut app, mut frame, result) = live_query_app("");
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    type_text(&ctx, &mut app, &mut frame, &mut t, ">t docs");
+    assert_eq!(app.filter_visible, vec![1]);
+    type_key(&ctx, &mut app, &mut frame, &mut t, egui::Key::Enter);
+    let picked = result.lock().unwrap().clone().expect("picked tab");
+    assert_eq!(picked.id, "https://docs.rs");
+    assert_eq!(picked.label, "docs.rs");
+}
+
+/// Actions attached by the hook are collected after the swap, so a dynamic
+/// row still fires its command (paths are rebuilt for the new list).
+#[test]
+fn live_prefix_keeps_actions_for_dynamic_options() {
+    use eframe::App as _;
+    let apps = vec![crate::ModalOption::new("app", "App")];
+    let dynamic = vec![crate::ModalOption::new("dyn", "Dynamic").command("true")];
+    let modal = crate::Modal::new("Launcher")
+        .options(apps)
+        .on_query_change(move |query| {
+            (query == "!dyn").then(|| {
+                crate::QueryChange::new()
+                    .options(dynamic.clone())
+                    .filter("")
+            })
+        });
+    let actions = Arc::new(Mutex::new(collect_actions_from(&modal.options)));
+    assert_eq!(actions.lock().unwrap().len(), 0);
+    let ctx = egui::Context::default();
+    let cc = eframe::CreationContext::_new_kittest(ctx.clone());
+    let result = Arc::new(Mutex::new(None));
+    let mut app = ModalApp::new_with_actions(&cc, modal, result, actions.clone());
+    let mut frame = eframe::Frame::_new_kittest();
+    let mut t = 0.0;
+    for _ in 0..3 {
+        t += 1.0 / 60.0;
+        let _ = ctx.run(headless_input(t), |ctx| app.update(ctx, &mut frame));
+    }
+    type_text(&ctx, &mut app, &mut frame, &mut t, "!dyn");
+    let actions = actions.lock().unwrap();
+    assert_eq!(actions.len(), 1);
+    assert_eq!(actions[0].0, vec![0]);
+    assert!(matches!(
+        actions[0].1,
+        crate::SelectAction::Command { ref program, .. } if program == "true"
+    ));
 }
